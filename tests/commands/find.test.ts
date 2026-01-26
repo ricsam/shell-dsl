@@ -1,0 +1,398 @@
+import { test, expect, describe, beforeEach } from "bun:test";
+import { createFsFromVolume, Volume } from "memfs";
+import { createVirtualFS, createShellDSL } from "../../src/index.ts";
+import { builtinCommands } from "../../commands/index.ts";
+
+describe("find command", () => {
+  let vol: InstanceType<typeof Volume>;
+  let sh: ReturnType<typeof createShellDSL>;
+
+  beforeEach(() => {
+    vol = new Volume();
+    vol.fromJSON({
+      "/project/src/index.ts": "main file",
+      "/project/src/utils/helper.ts": "helper",
+      "/project/src/utils/parser.ts": "parser",
+      "/project/src/components/Button.tsx": "button",
+      "/project/src/components/Input.tsx": "input",
+      "/project/tests/index.test.ts": "test file",
+      "/project/tests/utils.test.ts": "utils test",
+      "/project/README.md": "readme",
+      "/project/package.json": "{}",
+      "/data/file1.txt": "data1",
+      "/data/file2.txt": "data2",
+      "/data/file3.TXT": "uppercase ext",
+      "/data/subdir/nested.txt": "nested",
+      "/data/subdir/other.log": "log file",
+    });
+    const memfs = createFsFromVolume(vol);
+    const fs = createVirtualFS(memfs);
+
+    sh = createShellDSL({
+      fs,
+      cwd: "/",
+      env: {},
+      commands: builtinCommands,
+    });
+  });
+
+  describe("basic find", () => {
+    test("finds all files and directories in a tree", async () => {
+      const result = await sh`find /data`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).toContain("/data/file3.TXT");
+      expect(lines).toContain("/data/subdir");
+      expect(lines).toContain("/data/subdir/nested.txt");
+      expect(lines).toContain("/data/subdir/other.log");
+    });
+
+    test("uses current directory by default", async () => {
+      sh.cwd("/data");
+      const result = await sh`find`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain(".");
+      expect(lines).toContain("file1.txt");
+      expect(lines).toContain("subdir");
+    });
+
+    test("multiple starting paths", async () => {
+      const result = await sh`find /data/file1.txt /data/file2.txt`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines.length).toBe(2);
+    });
+  });
+
+  describe("-name pattern matching", () => {
+    test("finds files matching exact name", async () => {
+      const result = await sh`find /project -name package.json`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/project/package.json");
+      expect(lines.length).toBe(1);
+    });
+
+    test("finds files matching wildcard pattern *.ts", async () => {
+      const result = await sh`find /project -name "*.ts"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/project/src/index.ts");
+      expect(lines).toContain("/project/src/utils/helper.ts");
+      expect(lines).toContain("/project/src/utils/parser.ts");
+      expect(lines).toContain("/project/tests/index.test.ts");
+      expect(lines).toContain("/project/tests/utils.test.ts");
+      // Should not include .tsx files
+      expect(lines).not.toContain("/project/src/components/Button.tsx");
+    });
+
+    test("finds files matching wildcard pattern *.tsx", async () => {
+      const result = await sh`find /project -name "*.tsx"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/project/src/components/Button.tsx");
+      expect(lines).toContain("/project/src/components/Input.tsx");
+      expect(lines.length).toBe(2);
+    });
+
+    test("finds files matching pattern with ?", async () => {
+      const result = await sh`find /data -name "file?.txt"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      // Case sensitive, file3.TXT won't match .txt
+      expect(lines).not.toContain("/data/file3.TXT");
+      expect(lines.length).toBe(2);
+    });
+
+    test("-name is case sensitive", async () => {
+      const result = await sh`find /data -name "*.txt"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).not.toContain("/data/file3.TXT");
+    });
+
+    test("-name matches directories too", async () => {
+      const result = await sh`find /project -name src`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/project/src");
+      expect(lines.length).toBe(1);
+    });
+
+    test("missing argument to -name returns error", async () => {
+      const result = await sh`find /data -name`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing argument to '-name'");
+    });
+  });
+
+  describe("-iname case-insensitive matching", () => {
+    test("finds files case-insensitively", async () => {
+      const result = await sh`find /data -iname "*.txt"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).toContain("/data/file3.TXT");
+      expect(lines).toContain("/data/subdir/nested.txt");
+    });
+
+    test("-iname pattern itself is case-insensitive", async () => {
+      const result = await sh`find /data -iname "*.TXT"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file3.TXT");
+    });
+
+    test("missing argument to -iname returns error", async () => {
+      const result = await sh`find /data -iname`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing argument to '-iname'");
+    });
+  });
+
+  describe("-type filtering", () => {
+    test("-type f finds only files", async () => {
+      const result = await sh`find /data -type f`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).toContain("/data/file3.TXT");
+      expect(lines).toContain("/data/subdir/nested.txt");
+      expect(lines).toContain("/data/subdir/other.log");
+      // Should not include directories
+      expect(lines).not.toContain("/data");
+      expect(lines).not.toContain("/data/subdir");
+    });
+
+    test("-type d finds only directories", async () => {
+      const result = await sh`find /data -type d`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data");
+      expect(lines).toContain("/data/subdir");
+      // Should not include files
+      expect(lines).not.toContain("/data/file1.txt");
+      expect(lines).not.toContain("/data/subdir/nested.txt");
+    });
+
+    test("invalid -type argument returns error", async () => {
+      const result = await sh`find /data -type x`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("Unknown argument to -type: x");
+    });
+
+    test("missing argument to -type returns error", async () => {
+      const result = await sh`find /data -type`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing argument to '-type'");
+    });
+  });
+
+  describe("-maxdepth limiting", () => {
+    test("-maxdepth 0 returns only starting point", async () => {
+      const result = await sh`find /data -maxdepth 0`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data");
+      expect(lines.length).toBe(1);
+    });
+
+    test("-maxdepth 1 returns starting point and direct children", async () => {
+      const result = await sh`find /data -maxdepth 1`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).toContain("/data/file3.TXT");
+      expect(lines).toContain("/data/subdir");
+      // Should not include nested items
+      expect(lines).not.toContain("/data/subdir/nested.txt");
+      expect(lines).not.toContain("/data/subdir/other.log");
+    });
+
+    test("-maxdepth 2 allows one level of nesting", async () => {
+      const result = await sh`find /data -maxdepth 2`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data");
+      expect(lines).toContain("/data/subdir");
+      expect(lines).toContain("/data/subdir/nested.txt");
+      expect(lines).toContain("/data/subdir/other.log");
+    });
+
+    test("missing argument to -maxdepth returns error", async () => {
+      const result = await sh`find /data -maxdepth`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing argument to '-maxdepth'");
+    });
+
+    test("invalid -maxdepth value returns error", async () => {
+      const result = await sh`find /data -maxdepth abc`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("Invalid argument 'abc' to -maxdepth");
+    });
+
+    test("negative -maxdepth value returns error", async () => {
+      const result = await sh`find /data -maxdepth -1`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("Invalid argument '-1' to -maxdepth");
+    });
+  });
+
+  describe("-mindepth limiting", () => {
+    test("-mindepth 1 excludes starting point", async () => {
+      const result = await sh`find /data -mindepth 1`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).not.toContain("/data");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/subdir");
+      expect(lines).toContain("/data/subdir/nested.txt");
+    });
+
+    test("-mindepth 2 excludes first level", async () => {
+      const result = await sh`find /data -mindepth 2`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).not.toContain("/data");
+      expect(lines).not.toContain("/data/file1.txt");
+      expect(lines).not.toContain("/data/subdir");
+      expect(lines).toContain("/data/subdir/nested.txt");
+      expect(lines).toContain("/data/subdir/other.log");
+    });
+
+    test("-mindepth 0 includes everything", async () => {
+      const result = await sh`find /data -mindepth 0`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/subdir/nested.txt");
+    });
+
+    test("missing argument to -mindepth returns error", async () => {
+      const result = await sh`find /data -mindepth`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing argument to '-mindepth'");
+    });
+  });
+
+  describe("combined filters", () => {
+    test("-type f -name combines file type and name pattern", async () => {
+      const result = await sh`find /project -type f -name "*.ts"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/project/src/index.ts");
+      expect(lines).toContain("/project/src/utils/helper.ts");
+      expect(lines).not.toContain("/project/src"); // directory
+      expect(lines).not.toContain("/project/src/components/Button.tsx"); // not .ts
+    });
+
+    test("-type d -name finds directories by name", async () => {
+      const result = await sh`find /project -type d -name "src"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/project/src");
+      expect(lines.length).toBe(1);
+    });
+
+    test("-maxdepth and -type f combine correctly", async () => {
+      const result = await sh`find /data -maxdepth 1 -type f`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).not.toContain("/data"); // directory
+      expect(lines).not.toContain("/data/subdir/nested.txt"); // too deep
+    });
+
+    test("-mindepth and -maxdepth together", async () => {
+      const result = await sh`find /data -mindepth 1 -maxdepth 1`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).not.toContain("/data");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/subdir");
+      expect(lines).not.toContain("/data/subdir/nested.txt");
+    });
+
+    test("all filters combined", async () => {
+      const result = await sh`find /project -mindepth 2 -maxdepth 3 -type f -name "*.ts"`.text();
+      const lines = result.trim().split("\n");
+      // depth 2: src/index.ts, tests/index.test.ts, etc
+      // depth 3: src/utils/helper.ts, src/components/* (but .tsx not .ts)
+      expect(lines).toContain("/project/src/index.ts");
+      expect(lines).toContain("/project/src/utils/helper.ts");
+      expect(lines).toContain("/project/tests/index.test.ts");
+      expect(lines).not.toContain("/project"); // depth 0
+      expect(lines).not.toContain("/project/src"); // directory
+    });
+  });
+
+  describe("error handling", () => {
+    test("non-existent path returns error", async () => {
+      const result = await sh`find /nonexistent`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("No such file or directory");
+    });
+
+    test("unknown predicate returns error", async () => {
+      const result = await sh`find /data -unknown`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("unknown predicate '-unknown'");
+    });
+
+    test("starting from a file works", async () => {
+      const result = await sh`find /data/file1.txt`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines.length).toBe(1);
+    });
+
+    test("starting from file with -type d returns nothing", async () => {
+      const result = await sh`find /data/file1.txt -type d`.text();
+      expect(result.trim()).toBe("");
+    });
+
+    test("starting from file with -type f returns the file", async () => {
+      const result = await sh`find /data/file1.txt -type f`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+    });
+
+    test("partial failure with multiple paths", async () => {
+      const result = await sh`find /data /nonexistent`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("No such file or directory");
+      // But should still output results from valid path
+      expect(result.stdout.toString()).toContain("/data");
+    });
+  });
+
+  describe("character class in patterns", () => {
+    test("-name with [0-9] character class", async () => {
+      const result = await sh`find /data -name "file[0-9].txt"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+    });
+
+    test("-name with negated character class [!0-9]", async () => {
+      vol.fromJSON({
+        "/chars/filea.txt": "",
+        "/chars/file1.txt": "",
+      });
+      const result = await sh`find /chars -name "file[!0-9].txt"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/chars/filea.txt");
+      expect(lines).not.toContain("/chars/file1.txt");
+    });
+  });
+
+  describe("output format", () => {
+    test("entries are sorted alphabetically", async () => {
+      const result = await sh`find /data -maxdepth 1`.text();
+      const lines = result.trim().split("\n");
+      // Check order: /data comes first, then children sorted
+      expect(lines[0]).toBe("/data");
+      // The direct children should be sorted
+      const children = lines.slice(1).filter((l) => l.startsWith("/data/") && !l.includes("subdir/"));
+    });
+
+    test("each result is on its own line", async () => {
+      const result = await sh`find /data -maxdepth 0`.text();
+      expect(result).toBe("/data\n");
+    });
+  });
+});

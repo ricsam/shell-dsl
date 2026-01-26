@@ -441,7 +441,7 @@ import { builtinCommands } from "shell-dsl/commands";
 Or import individually:
 
 ```ts
-import { echo, cat, grep, wc, cp, mv, touch, tee, tree } from "shell-dsl/commands";
+import { echo, cat, grep, wc, cp, mv, touch, tee, tree, find } from "shell-dsl/commands";
 ```
 
 | Command | Description |
@@ -463,6 +463,7 @@ import { echo, cat, grep, wc, cp, mv, touch, tee, tree } from "shell-dsl/command
 | `touch` | Create empty files or update timestamps (`-c` no-create) |
 | `tee` | Duplicate stdin to stdout and files (`-a` append) |
 | `tree` | Display directory structure as tree (`-a` all, `-d` dirs only, `-L <n>` depth) |
+| `find` | Search for files (`-name`, `-iname`, `-type f\|d`, `-maxdepth`, `-mindepth`) |
 | `test` / `[` | File and string tests (`-f`, `-d`, `-e`, `-z`, `-n`, `=`, `!=`) |
 | `true` | Exit with code 0 |
 | `false` | Exit with code 1 |

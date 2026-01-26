@@ -19,6 +19,7 @@ export { cp } from "./cp.ts";
 export { mv } from "./mv.ts";
 export { tee } from "./tee.ts";
 export { tree } from "./tree.ts";
+export { find } from "./find.ts";
 
 // Re-export all commands as a bundle
 import { echo } from "./echo.ts";
@@ -40,6 +41,7 @@ import { cp } from "./cp.ts";
 import { mv } from "./mv.ts";
 import { tee } from "./tee.ts";
 import { tree } from "./tree.ts";
+import { find } from "./find.ts";
 
 export const builtinCommands: Record<string, Command> = {
   echo,
@@ -63,4 +65,5 @@ export const builtinCommands: Record<string, Command> = {
   mv,
   tee,
   tree,
+  find,
 };
