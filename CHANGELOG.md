@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.4
+
+### Patch Changes
+
+- add tree
+
 ## 0.0.3
 
 ### Patch Changes
