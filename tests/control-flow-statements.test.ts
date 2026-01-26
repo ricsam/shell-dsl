@@ -504,6 +504,68 @@ describe("Control Flow Statements", () => {
     });
   });
 
+  describe("break and continue errors", () => {
+    test("break with invalid level 0", async () => {
+      const result = await sh`
+        for i in 1 2 3; do
+          break 0
+        done
+      `.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid level");
+    });
+
+    test("break with negative level", async () => {
+      const result = await sh`
+        for i in 1 2 3; do
+          break -1
+        done
+      `.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid level");
+    });
+
+    test("break with non-numeric argument", async () => {
+      const result = await sh`
+        for i in 1 2 3; do
+          break abc
+        done
+      `.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid level");
+    });
+
+    test("continue with invalid level 0", async () => {
+      const result = await sh`
+        for i in 1 2 3; do
+          continue 0
+        done
+      `.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid level");
+    });
+
+    test("continue with negative level", async () => {
+      const result = await sh`
+        for i in 1 2 3; do
+          continue -1
+        done
+      `.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid level");
+    });
+
+    test("continue with non-numeric argument", async () => {
+      const result = await sh`
+        for i in 1 2 3; do
+          continue xyz
+        done
+      `.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid level");
+    });
+  });
+
   describe("edge cases", () => {
     test("empty for loop body", async () => {
       const result = await sh`for i in a b c; do true; done`.text();
