@@ -1,6 +1,6 @@
 {
   "name": "shell-dsl",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "A sandboxed shell-style DSL for running scriptable command pipelines in-process without host OS access",
   "module": "index.ts",
   "type": "module",

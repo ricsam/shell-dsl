@@ -2,7 +2,7 @@
 export * from "./src/index.ts";
 
 // Re-export built-in commands
-export { builtinCommands } from "./commands/index.ts";
+export { builtinCommands } from "./src/commands/index.ts";
 export {
   echo,
   cat,
@@ -20,4 +20,14 @@ export {
   bracket,
   trueCmd,
   falseCmd,
-} from "./commands/index.ts";
+  touch,
+  cp,
+  mv,
+  tee,
+  tree,
+  find,
+  sed,
+  awk,
+  breakCmd,
+  continueCmd,
+} from "./src/commands/index.ts";

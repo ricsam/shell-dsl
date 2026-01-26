@@ -6,7 +6,7 @@ import {
   ShellError,
   type Command,
 } from "../src/index.ts";
-import { builtinCommands } from "../commands/index.ts";
+import { builtinCommands } from "../src/commands/index.ts";
 
 /**
  * This test file validates all code examples from the README.md

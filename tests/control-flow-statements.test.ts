@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { createFsFromVolume, Volume } from "memfs";
 import { createShellDSL, createVirtualFS } from "../src/index.ts";
-import { builtinCommands } from "../commands/index.ts";
+import { builtinCommands } from "../src/commands/index.ts";
 import type { VirtualFS } from "../src/types.ts";
 
 describe("Control Flow Statements", () => {

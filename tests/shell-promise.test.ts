@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { createFsFromVolume, Volume } from "memfs";
 import { createVirtualFS, createShellDSL, ShellError } from "../src/index.ts";
-import { builtinCommands } from "../commands/index.ts";
+import { builtinCommands } from "../src/commands/index.ts";
 
 describe("ShellPromise", () => {
   let vol: InstanceType<typeof Volume>;

@@ -4,7 +4,7 @@ import { createVirtualFS } from "../src/fs/index.ts";
 import { Interpreter } from "../src/interpreter/index.ts";
 import { lex } from "../src/lexer/index.ts";
 import { parse } from "../src/parser/index.ts";
-import { builtinCommands } from "../commands/index.ts";
+import { builtinCommands } from "../src/commands/index.ts";
 
 describe("Interpreter", () => {
   let vol: InstanceType<typeof Volume>;

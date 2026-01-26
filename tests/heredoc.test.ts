@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { createFsFromVolume, Volume } from "memfs";
 import { createVirtualFS, createShellDSL } from "../src/index.ts";
-import { builtinCommands } from "../commands/index.ts";
+import { builtinCommands } from "../src/commands/index.ts";
 import { lex } from "../src/lexer/index.ts";
 import { parse } from "../src/parser/index.ts";
 

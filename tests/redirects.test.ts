@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { createFsFromVolume, Volume } from "memfs";
 import { createVirtualFS, createShellDSL } from "../src/index.ts";
-import { builtinCommands } from "../commands/index.ts";
+import { builtinCommands } from "../src/commands/index.ts";
 
 describe("Redirections", () => {
   let vol: InstanceType<typeof Volume>;
