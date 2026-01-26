@@ -1,5 +1,5 @@
-import type { ShellConfig, Command, VirtualFS, ExecResult } from "./types.ts";
-import { isRawValue } from "./types.ts";
+import type { ShellConfig, Command, VirtualFS, ExecResult, RedirectObjectMap } from "./types.ts";
+import { isRawValue, isRedirectObject } from "./types.ts";
 import type { Token } from "./lexer/tokens.ts";
 import type { ASTNode } from "./parser/ast.ts";
 import { Lexer } from "./lexer/lexer.ts";
@@ -35,20 +35,58 @@ export class ShellDSL {
   tag(strings: TemplateStringsArray, ...values: unknown[]): ShellPromise {
     // Build the command string with escaped interpolations
     let source = strings[0] ?? "";
+    const redirectObjects: RedirectObjectMap = {};
+    let objIndex = 0;
+
     for (let i = 0; i < values.length; i++) {
       const value = values[i];
+      const precedingString = strings[i] ?? "";
+
       if (isRawValue(value)) {
         source += value.raw;
+      } else if (this.isRedirectTarget(precedingString, value)) {
+        // Value appears after a redirect operator - store as redirect object
+        const marker = `__REDIR_OBJ_${objIndex++}__`;
+        redirectObjects[marker] = value as Buffer | Blob | Response | string;
+        source += marker;
       } else {
         source += escapeForInterpolation(value);
       }
       source += strings[i + 1] ?? "";
     }
 
-    return this.createPromise(source);
+    return this.createPromise(source, { redirectObjects });
   }
 
-  private createPromise(source: string, options?: { cwd?: string; env?: Record<string, string>; shouldThrow?: boolean }): ShellPromise {
+  private isRedirectTarget(precedingString: string, value: unknown): boolean {
+    // Check if value is a redirect object type AND appears after redirect operator
+    if (!isRedirectObject(value) || isRawValue(value)) {
+      return false;
+    }
+    // Check if preceding string ends with redirect operator
+    const trimmed = precedingString.trimEnd();
+    const afterRedirectOp = /(<|>|>>|2>|2>>|&>|&>>)\s*$/.test(trimmed);
+
+    if (!afterRedirectOp) {
+      return false;
+    }
+
+    // Buffer, Blob, Response are always treated as redirect objects
+    if (Buffer.isBuffer(value) || value instanceof Blob || value instanceof Response) {
+      return true;
+    }
+
+    // For strings after input redirect (<), treat as content per spec
+    // For strings after output redirect (>), they must be Buffers
+    if (typeof value === "string") {
+      // Only input redirection supports string content
+      return /<\s*$/.test(trimmed);
+    }
+
+    return false;
+  }
+
+  private createPromise(source: string, options?: { cwd?: string; env?: Record<string, string>; shouldThrow?: boolean; redirectObjects?: RedirectObjectMap }): ShellPromise {
     const shell = this;
 
     return new ShellPromise({
@@ -61,6 +99,7 @@ export class ShellDSL {
           cwd,
           env,
           commands: shell.commands,
+          redirectObjects: options?.redirectObjects,
         });
 
         const tokens = shell.lex(source);

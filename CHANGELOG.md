@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.3
+
+### Patch Changes
+
+- linux compliant grep
+
 ## 0.0.2
 
 ### Patch Changes

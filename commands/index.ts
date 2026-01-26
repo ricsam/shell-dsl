@@ -14,6 +14,10 @@ export { mkdir } from "./mkdir.ts";
 export { rm } from "./rm.ts";
 export { test, bracket } from "./test.ts";
 export { trueCmd, falseCmd } from "./true-false.ts";
+export { touch } from "./touch.ts";
+export { cp } from "./cp.ts";
+export { mv } from "./mv.ts";
+export { tee } from "./tee.ts";
 
 // Re-export all commands as a bundle
 import { echo } from "./echo.ts";
@@ -30,6 +34,10 @@ import { mkdir } from "./mkdir.ts";
 import { rm } from "./rm.ts";
 import { test, bracket } from "./test.ts";
 import { trueCmd, falseCmd } from "./true-false.ts";
+import { touch } from "./touch.ts";
+import { cp } from "./cp.ts";
+import { mv } from "./mv.ts";
+import { tee } from "./tee.ts";
 
 export const builtinCommands: Record<string, Command> = {
   echo,
@@ -48,4 +56,8 @@ export const builtinCommands: Record<string, Command> = {
   "[": bracket,
   true: trueCmd,
   false: falseCmd,
+  touch,
+  cp,
+  mv,
+  tee,
 };

@@ -88,3 +88,19 @@ export function isRawValue(value: unknown): value is RawValue {
     typeof (value as RawValue).raw === "string"
   );
 }
+
+// JS Object Redirection types
+export type RedirectObject = Buffer | Blob | Response | string;
+
+export interface RedirectObjectMap {
+  [marker: string]: RedirectObject;
+}
+
+export function isRedirectObject(value: unknown): value is RedirectObject {
+  return (
+    Buffer.isBuffer(value) ||
+    value instanceof Blob ||
+    value instanceof Response ||
+    typeof value === "string"
+  );
+}

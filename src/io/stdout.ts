@@ -143,3 +143,53 @@ export function createStderr(): OutputCollector {
 export function createPipe(): PipeBuffer {
   return new PipeBuffer();
 }
+
+export class BufferTargetCollector implements OutputCollector {
+  private target: Buffer;
+  private offset: number = 0;
+  private closed: boolean = false;
+  private closeResolvers: Array<() => void> = [];
+
+  constructor(target: Buffer) {
+    this.target = target;
+  }
+
+  async write(chunk: Uint8Array): Promise<void> {
+    if (this.closed) {
+      throw new Error("Output stream is closed");
+    }
+    for (let i = 0; i < chunk.length && this.offset < this.target.length; i++) {
+      this.target[this.offset++] = chunk[i]!;
+    }
+  }
+
+  async writeText(str: string): Promise<void> {
+    const bytes = new TextEncoder().encode(str);
+    await this.write(bytes);
+  }
+
+  close(): void {
+    this.closed = true;
+    for (const resolve of this.closeResolvers) {
+      resolve();
+    }
+    this.closeResolvers = [];
+  }
+
+  async collect(): Promise<Buffer> {
+    while (!this.closed) {
+      await new Promise<void>((resolve) => {
+        this.closeResolvers.push(resolve);
+      });
+    }
+    return this.target.subarray(0, this.offset) as Buffer;
+  }
+
+  async *getReadableStream(): AsyncIterable<Uint8Array> {
+    yield this.target.subarray(0, this.offset);
+  }
+}
+
+export function createBufferTargetCollector(target: Buffer): OutputCollector {
+  return new BufferTargetCollector(target);
+}

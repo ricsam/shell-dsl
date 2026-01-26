@@ -1,8 +1,8 @@
 import type { ASTNode, CommandNode, Redirect } from "../parser/ast.ts";
-import type { Command, VirtualFS, ExecResult, OutputCollector } from "../types.ts";
+import type { Command, VirtualFS, ExecResult, OutputCollector, RedirectObjectMap } from "../types.ts";
 import { createCommandContext } from "./context.ts";
 import { createStdin } from "../io/stdin.ts";
-import { createStdout, createStderr, createPipe, PipeBuffer } from "../io/stdout.ts";
+import { createStdout, createStderr, createPipe, PipeBuffer, createBufferTargetCollector } from "../io/stdout.ts";
 import { Lexer } from "../lexer/lexer.ts";
 import { Parser } from "../parser/parser.ts";
 
@@ -11,6 +11,7 @@ export interface InterpreterOptions {
   cwd: string;
   env: Record<string, string>;
   commands: Record<string, Command>;
+  redirectObjects?: RedirectObjectMap;
 }
 
 export class Interpreter {
@@ -18,12 +19,14 @@ export class Interpreter {
   private cwd: string;
   private env: Record<string, string>;
   private commands: Record<string, Command>;
+  private redirectObjects: RedirectObjectMap;
 
   constructor(options: InterpreterOptions) {
     this.fs = options.fs;
     this.cwd = options.cwd;
     this.env = { ...options.env };
     this.commands = options.commands;
+    this.redirectObjects = options.redirectObjects ?? {};
   }
 
   async execute(ast: ASTNode): Promise<ExecResult> {
@@ -192,6 +195,11 @@ export class Interpreter {
   }> {
     const target = await this.evaluateNode(redirect.target);
 
+    // Check if target is a redirect object marker
+    if (target in this.redirectObjects) {
+      return this.handleObjectRedirect(redirect.mode, this.redirectObjects[target]!, stdin, stdout, stderr);
+    }
+
     switch (redirect.mode) {
       case "<": {
         // Input redirect
@@ -272,6 +280,80 @@ export class Interpreter {
       default:
         return { stdin, stdout, stderr };
     }
+  }
+
+  private async handleObjectRedirect(
+    mode: string,
+    obj: Buffer | Blob | Response | string,
+    stdin: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector
+  ): Promise<{
+    stdin: AsyncIterable<Uint8Array> | null;
+    stdout: OutputCollector;
+    stderr: OutputCollector;
+    stderrToStdout?: boolean;
+    stdoutToStderr?: boolean;
+    fileWritePromise?: Promise<void>;
+  }> {
+    switch (mode) {
+      case "<": {
+        // Input from object
+        const data = await this.readFromObject(obj);
+        return {
+          stdin: (async function* () {
+            yield data;
+          })(),
+          stdout,
+          stderr,
+        };
+      }
+      case ">":
+      case ">>": {
+        // Output to object (only Buffer supported)
+        if (!Buffer.isBuffer(obj)) {
+          throw new Error("Output redirection only supports Buffer targets");
+        }
+        const collector = createBufferTargetCollector(obj);
+        return { stdin, stdout: collector, stderr };
+      }
+      case "2>":
+      case "2>>": {
+        // Stderr to object (only Buffer supported)
+        if (!Buffer.isBuffer(obj)) {
+          throw new Error("Stderr redirection only supports Buffer targets");
+        }
+        const collector = createBufferTargetCollector(obj);
+        return { stdin, stdout, stderr: collector };
+      }
+      case "&>":
+      case "&>>": {
+        // Both to object (only Buffer supported)
+        if (!Buffer.isBuffer(obj)) {
+          throw new Error("Combined redirection only supports Buffer targets");
+        }
+        const collector = createBufferTargetCollector(obj);
+        return { stdin, stdout: collector, stderr: collector };
+      }
+      default:
+        return { stdin, stdout, stderr };
+    }
+  }
+
+  private async readFromObject(obj: Buffer | Blob | Response | string): Promise<Uint8Array> {
+    if (Buffer.isBuffer(obj)) {
+      return new Uint8Array(obj);
+    }
+    if (obj instanceof Blob) {
+      return new Uint8Array(await obj.arrayBuffer());
+    }
+    if (obj instanceof Response) {
+      return new Uint8Array(await obj.arrayBuffer());
+    }
+    if (typeof obj === "string") {
+      return new TextEncoder().encode(obj);
+    }
+    throw new Error("Unsupported redirect object type");
   }
 
   private async executePipeline(

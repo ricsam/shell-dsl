@@ -440,14 +440,14 @@ import { builtinCommands } from "shell-dsl/commands";
 Or import individually:
 
 ```ts
-import { echo, cat, grep, wc } from "shell-dsl/commands";
+import { echo, cat, grep, wc, cp, mv, touch, tee } from "shell-dsl/commands";
 ```
 
 | Command | Description |
 |---------|-------------|
 | `echo` | Print arguments to stdout |
 | `cat` | Concatenate files or stdin to stdout |
-| `grep` | Search for patterns (supports `-v`, `-i`, `-n`, `-c`) |
+| `grep` | Linux-compatible pattern search |
 | `wc` | Count lines, words, or characters (`-l`, `-w`, `-c`) |
 | `head` | Output first lines (`-n`) |
 | `tail` | Output last lines (`-n`) |
@@ -457,6 +457,10 @@ import { echo, cat, grep, wc } from "shell-dsl/commands";
 | `ls` | List directory contents |
 | `mkdir` | Create directories (`-p` parents) |
 | `rm` | Remove files/directories (`-r` recursive, `-f` force) |
+| `cp` | Copy files/directories (`-r` recursive, `-n` no-clobber) |
+| `mv` | Move/rename files/directories (`-n` no-clobber) |
+| `touch` | Create empty files or update timestamps (`-c` no-create) |
+| `tee` | Duplicate stdin to stdout and files (`-a` append) |
 | `test` / `[` | File and string tests (`-f`, `-d`, `-e`, `-z`, `-n`, `=`, `!=`) |
 | `true` | Exit with code 0 |
 | `false` | Exit with code 1 |
