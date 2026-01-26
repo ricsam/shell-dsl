@@ -202,7 +202,17 @@ export class Interpreter {
 
     switch (redirect.mode) {
       case "<": {
-        // Input redirect
+        if (redirect.heredocContent) {
+          // Heredoc: target is already the content
+          return {
+            stdin: (async function* () {
+              yield new TextEncoder().encode(target);
+            })(),
+            stdout,
+            stderr,
+          };
+        }
+        // Input redirect from file
         const path = this.fs.resolve(this.cwd, target);
         const content = await this.fs.readFile(path);
         return {

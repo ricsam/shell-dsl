@@ -22,6 +22,7 @@ export type Token =
   | { type: "singleQuote"; value: string }
   | { type: "doubleQuote"; parts: Array<string | Token> }
   | { type: "assignment"; name: string; value: string | Token[] }
+  | { type: "heredoc"; content: string; expand: boolean }
   | { type: "eof" };
 
 export function tokenToString(token: Token): string {
@@ -50,6 +51,8 @@ export function tokenToString(token: Token): string {
       return `"${token.parts.map((p) => (typeof p === "string" ? p : tokenToString(p))).join("")}"`;
     case "assignment":
       return `${token.name}=${typeof token.value === "string" ? token.value : token.value.map(tokenToString).join("")}`;
+    case "heredoc":
+      return `<<${token.expand ? "EOF" : "'EOF'"}\n${token.content}\nEOF`;
     case "eof":
       return "<EOF>";
   }

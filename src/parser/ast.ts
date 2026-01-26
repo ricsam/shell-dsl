@@ -12,6 +12,7 @@ export type RedirectMode =
 export interface Redirect {
   mode: RedirectMode;
   target: ASTNode;
+  heredocContent?: boolean;
 }
 
 export type ASTNode =

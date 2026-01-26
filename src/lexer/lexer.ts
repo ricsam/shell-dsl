@@ -25,6 +25,7 @@ export class Lexer {
   private pos: number = 0;
   private line: number = 1;
   private column: number = 1;
+  private tokenQueue: Token[] = [];
 
   constructor(source: string) {
     this.source = source;
@@ -33,7 +34,13 @@ export class Lexer {
   tokenize(): Token[] {
     const tokens: Token[] = [];
 
-    while (!this.isAtEnd()) {
+    while (!this.isAtEnd() || this.tokenQueue.length > 0) {
+      // Drain token queue first (for heredoc handling)
+      if (this.tokenQueue.length > 0) {
+        tokens.push(this.tokenQueue.shift()!);
+        continue;
+      }
+
       this.skipWhitespace();
       if (this.isAtEnd()) break;
 
@@ -48,6 +55,11 @@ export class Lexer {
   }
 
   private nextToken(): Token | null {
+    // Check token queue first (used for heredoc handling)
+    if (this.tokenQueue.length > 0) {
+      return this.tokenQueue.shift()!;
+    }
+
     const char = this.peek();
 
     // Comments
@@ -101,6 +113,10 @@ export class Lexer {
 
     if (char === "<") {
       this.advance();
+      if (this.peek() === "<") {
+        this.advance();
+        return this.readHeredoc();
+      }
       return { type: "redirect", mode: "<" };
     }
 
@@ -308,6 +324,183 @@ export class Lexer {
       return { type: "glob", pattern: value };
     }
 
+    return { type: "word", value };
+  }
+
+  private readHeredoc(): Token {
+    // Check for tab-stripping variant (<<-)
+    const stripTabs = this.peek() === "-";
+    if (stripTabs) {
+      this.advance();
+    }
+
+    // Skip whitespace before delimiter
+    while (this.peek() === " " || this.peek() === "\t") {
+      this.advance();
+    }
+
+    // Read delimiter and determine if expansion is enabled
+    const { delimiter, expand } = this.readHeredocDelimiter();
+
+    // Tokenize the rest of the current line and queue those tokens
+    this.tokenizeRestOfLine();
+
+    // Skip the newline that starts the heredoc content
+    if (this.peek() === "\n") {
+      this.advance();
+    }
+
+    // Read content until closing delimiter
+    let content = "";
+    while (!this.isAtEnd()) {
+      const lineStart = this.pos;
+      let line = "";
+
+      // Read until end of line or end of input
+      while (!this.isAtEnd() && this.peek() !== "\n") {
+        line += this.advance();
+      }
+
+      // Check if this line is the delimiter (after stripping leading tabs if <<-)
+      const strippedLine = stripTabs ? line.replace(/^\t+/, "") : line;
+      if (strippedLine === delimiter) {
+        // Found closing delimiter, consume newline if present
+        if (this.peek() === "\n") {
+          this.advance();
+        }
+        break;
+      }
+
+      // Add the line to content
+      if (stripTabs) {
+        content += line.replace(/^\t+/, "");
+      } else {
+        content += line;
+      }
+
+      // Add newline if present
+      if (this.peek() === "\n") {
+        content += this.advance();
+      }
+    }
+
+    return { type: "heredoc", content, expand };
+  }
+
+  private readHeredocDelimiter(): { delimiter: string; expand: boolean } {
+    const quoteChar = this.peek();
+
+    // Quoted delimiter - no expansion
+    if (quoteChar === "'" || quoteChar === '"') {
+      this.advance(); // consume opening quote
+      let delimiter = "";
+      while (!this.isAtEnd() && this.peek() !== quoteChar && this.peek() !== "\n") {
+        delimiter += this.advance();
+      }
+      if (this.peek() === quoteChar) {
+        this.advance(); // consume closing quote
+      }
+      return { delimiter, expand: false };
+    }
+
+    // Unquoted delimiter - expansion enabled
+    let delimiter = "";
+    while (!this.isAtEnd() && !this.isWordBreak(this.peek()) && this.peek() !== "\n") {
+      if (this.peek() === "\\") {
+        this.advance();
+        if (!this.isAtEnd()) {
+          delimiter += this.advance();
+        }
+      } else {
+        delimiter += this.advance();
+      }
+    }
+
+    return { delimiter, expand: true };
+  }
+
+  private tokenizeRestOfLine(): void {
+    // Tokenize the rest of the line (until newline or end)
+    while (!this.isAtEnd() && this.peek() !== "\n") {
+      // Skip only spaces and tabs, not newlines
+      while (this.peek() === " " || this.peek() === "\t") {
+        this.advance();
+      }
+      if (this.isAtEnd() || this.peek() === "\n") break;
+
+      const token = this.readRestOfLineToken();
+      if (token) {
+        this.tokenQueue.push(token);
+      }
+    }
+  }
+
+  private readRestOfLineToken(): Token | null {
+    const char = this.peek();
+
+    if (char === "|") {
+      this.advance();
+      if (this.peek() === "|") {
+        this.advance();
+        return { type: "or" };
+      }
+      return { type: "pipe" };
+    }
+
+    if (char === "&") {
+      this.advance();
+      if (this.peek() === "&") {
+        this.advance();
+        return { type: "and" };
+      }
+      return { type: "word", value: "&" };
+    }
+
+    if (char === ";") {
+      this.advance();
+      return { type: "semicolon" };
+    }
+
+    if (char === ">") {
+      this.advance();
+      if (this.peek() === ">") {
+        this.advance();
+        return { type: "redirect", mode: ">>" };
+      }
+      return { type: "redirect", mode: ">" };
+    }
+
+    if (char === "<") {
+      this.advance();
+      return { type: "redirect", mode: "<" };
+    }
+
+    if (char === "$") {
+      return this.readVariable();
+    }
+
+    if (char === "'") {
+      return this.readSingleQuote();
+    }
+
+    if (char === '"') {
+      return this.readDoubleQuote();
+    }
+
+    // Read a word but stop at newline
+    let value = "";
+    while (!this.isAtEnd() && !this.isWordBreak(this.peek()) && this.peek() !== "\n") {
+      if (this.peek() === "\\") {
+        this.advance();
+        if (!this.isAtEnd()) {
+          value += this.advance();
+        }
+      } else {
+        value += this.advance();
+      }
+    }
+
+    if (value === "") return null;
     return { type: "word", value };
   }
 

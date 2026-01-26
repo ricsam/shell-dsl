@@ -86,7 +86,17 @@ export class Parser {
 
     // Collect command name and arguments
     while (this.isWordToken()) {
-      args.push(this.parseWordArg());
+      // Check if it's a heredoc token - convert to input redirect
+      if (this.peek().type === "heredoc") {
+        const heredocToken = this.advance() as Token & { type: "heredoc" };
+        redirects.push({
+          mode: "<",
+          target: this.tokenToNode(heredocToken),
+          heredocContent: true,
+        });
+      } else {
+        args.push(this.parseWordArg());
+      }
     }
 
     // Collect redirects
@@ -149,8 +159,13 @@ export class Parser {
         return { type: "glob", pattern: token.pattern };
       case "assignment":
         return this.tokenToNode(token.value);
+      case "heredoc":
+        if (token.expand) {
+          return this.parseHeredocContent(token.content);
+        }
+        return { type: "literal", value: token.content };
       default:
-        throw new ParseError(`Unexpected token type: ${token.type}`);
+        throw new ParseError(`Unexpected token type: ${(token as Token).type}`);
     }
   }
 
@@ -175,6 +190,72 @@ export class Parser {
     });
 
     return { type: "concat", parts: nodes };
+  }
+
+  private parseHeredocContent(content: string): ASTNode {
+    // Parse content looking for $VAR and ${VAR} patterns
+    const parts: ASTNode[] = [];
+    let currentLiteral = "";
+    let i = 0;
+
+    while (i < content.length) {
+      if (content[i] === "$") {
+        // Flush current literal
+        if (currentLiteral) {
+          parts.push({ type: "literal", value: currentLiteral });
+          currentLiteral = "";
+        }
+
+        i++; // consume $
+        if (i >= content.length) {
+          currentLiteral += "$";
+          break;
+        }
+
+        if (content[i] === "{") {
+          // ${VAR} syntax
+          i++; // consume {
+          let varName = "";
+          while (i < content.length && content[i] !== "}") {
+            varName += content[i];
+            i++;
+          }
+          if (i < content.length && content[i] === "}") {
+            i++; // consume }
+          }
+          if (varName) {
+            parts.push({ type: "variable", name: varName });
+          }
+        } else if (/[a-zA-Z_]/.test(content[i] ?? "")) {
+          // $VAR syntax
+          let varName = "";
+          while (i < content.length && /[a-zA-Z0-9_]/.test(content[i] ?? "")) {
+            varName += content[i];
+            i++;
+          }
+          parts.push({ type: "variable", name: varName });
+        } else {
+          // Not a variable, keep the $
+          currentLiteral += "$";
+        }
+      } else {
+        currentLiteral += content[i];
+        i++;
+      }
+    }
+
+    // Flush remaining literal
+    if (currentLiteral) {
+      parts.push({ type: "literal", value: currentLiteral });
+    }
+
+    if (parts.length === 0) {
+      return { type: "literal", value: "" };
+    }
+    if (parts.length === 1) {
+      return parts[0]!;
+    }
+    return { type: "concat", parts };
   }
 
   private parseRedirect(): Redirect {
@@ -202,7 +283,8 @@ export class Parser {
       token.type === "doubleQuote" ||
       token.type === "variable" ||
       token.type === "substitution" ||
-      token.type === "glob"
+      token.type === "glob" ||
+      token.type === "heredoc"
     );
   }
 
