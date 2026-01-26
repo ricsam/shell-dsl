@@ -1,9 +1,33 @@
 {
   "name": "shell-dsl",
+  "version": "0.0.0",
+  "description": "A sandboxed shell-style DSL for running scriptable command pipelines in-process without host OS access",
   "module": "index.ts",
   "type": "module",
+  "author": "ricsam <oss@ricsam.dev>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ricsam/shell-dsl.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ricsam/shell-dsl/issues"
+  },
+  "homepage": "https://github.com/ricsam/shell-dsl#readme",
+  "keywords": [
+    "shell",
+    "dsl",
+    "sandbox",
+    "pipeline",
+    "virtual-filesystem",
+    "scripting",
+    "interpreter",
+    "parser",
+    "lexer"
+  ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:npm": "bun scripts/build.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
