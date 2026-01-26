@@ -20,6 +20,8 @@ export { mv } from "./mv.ts";
 export { tee } from "./tee.ts";
 export { tree } from "./tree.ts";
 export { find } from "./find.ts";
+export { sed } from "./sed.ts";
+export { awk } from "./awk.ts";
 
 // Re-export all commands as a bundle
 import { echo } from "./echo.ts";
@@ -42,6 +44,8 @@ import { mv } from "./mv.ts";
 import { tee } from "./tee.ts";
 import { tree } from "./tree.ts";
 import { find } from "./find.ts";
+import { sed } from "./sed.ts";
+import { awk } from "./awk.ts";
 
 export const builtinCommands: Record<string, Command> = {
   echo,
@@ -66,4 +70,6 @@ export const builtinCommands: Record<string, Command> = {
   tee,
   tree,
   find,
+  sed,
+  awk,
 };
