@@ -31,6 +31,7 @@ bun add shell-dsl memfs
 
 - **Sandboxed execution** — No host OS access; all commands run in-process
 - **Virtual filesystem** — Uses memfs for complete isolation from the real filesystem
+- **Real filesystem** — Optional sandboxed access to real files with path containment and permissions
 - **Explicit command registry** — Only registered commands can execute
 - **Automatic escaping** — Interpolated values are escaped by default for safety
 - **POSIX-inspired syntax** — Pipes, redirects, control flow operators, and more
@@ -509,6 +510,86 @@ interface VirtualFS {
 }
 ```
 
+## Real Filesystem Access
+
+For scenarios where you need to access the real filesystem with sandboxing, use `FileSystem` or `ReadOnlyFileSystem`:
+
+```ts
+import { createShellDSL, FileSystem } from "shell-dsl";
+import { builtinCommands } from "shell-dsl/commands";
+
+// Mount a directory with permission rules
+const fs = new FileSystem("./project", {
+  ".env": "excluded",           // Cannot read or write
+  ".git/**": "excluded",        // Block entire directory
+  "config/**": "read-only",     // Can read, cannot write
+  "src/**": "read-write",       // Full access (default)
+});
+
+const sh = createShellDSL({
+  fs,
+  cwd: "/",
+  env: {},
+  commands: builtinCommands,
+});
+
+await sh`cat /src/index.ts`.text();      // Works
+await sh`cat /.env`.text();              // Throws: excluded
+await sh`echo "x" > /config/app.json`;   // Throws: read-only
+```
+
+### Permission Types
+
+| Permission | Read | Write |
+|------------|------|-------|
+| `"read-write"` | Yes | Yes |
+| `"read-only"` | Yes | No |
+| `"excluded"` | No | No |
+
+### Rule Specificity
+
+When multiple rules match, the most specific wins:
+
+1. More path segments: `a/b/c` beats `a/b`
+2. Literal beats wildcard: `config/app.json` beats `config/*`
+3. Single wildcard beats double: `src/*` beats `src/**`
+
+```ts
+const fs = new FileSystem("./project", {
+  "**": "read-only",              // Default: read-only
+  "src/**": "read-write",         // Override for src/
+  "src/generated/**": "excluded", // But not generated files
+});
+```
+
+### ReadOnlyFileSystem
+
+Convenience class that defaults all paths to read-only:
+
+```ts
+import { ReadOnlyFileSystem } from "shell-dsl";
+
+const fs = new ReadOnlyFileSystem("./docs");
+
+// All writes blocked by default
+await fs.writeFile("/file.txt", "x");  // Throws: read-only
+
+// Can still exclude or allow specific paths
+const fs2 = new ReadOnlyFileSystem("./docs", {
+  "drafts/**": "read-write",  // Allow writes here
+  ".internal/**": "excluded", // Block completely
+});
+```
+
+### Full System Access
+
+Omit the mount path for unrestricted access, but this is the same as just passing `fs` from `node:fs`:
+
+```ts
+const fs = new FileSystem();  // Full filesystem access same as fs from node:fs
+```
+
+
 ## Low-Level API
 
 For advanced use cases (custom tooling, AST inspection):
@@ -570,6 +651,9 @@ import type {
   ExecResult,
   ShellConfig,
   RawValue,
+  Permission,
+  PermissionRules,
+  UnderlyingFS,
 } from "shell-dsl";
 ```
 

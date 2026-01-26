@@ -59,6 +59,13 @@ export { Interpreter, type InterpreterOptions } from "./interpreter/index.ts";
 
 // Filesystem
 export { createVirtualFS } from "./fs/index.ts";
+export {
+  FileSystem,
+  ReadOnlyFileSystem,
+  type Permission,
+  type PermissionRules,
+  type UnderlyingFS,
+} from "./fs/index.ts";
 
 // I/O
 export { createStdin, StdinImpl } from "./io/index.ts";
