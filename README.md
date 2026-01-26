@@ -2,92 +2,570 @@
 
 A sandboxed shell-style DSL for running scriptable command pipelines where all commands are explicitly registered and executed in-process, without access to the host OS.
 
-## Features
+```ts
+import { createShellDSL, createVirtualFS } from "shell-dsl";
+import { createFsFromVolume, Volume } from "memfs";
+import { builtinCommands } from "shell-dsl/commands";
 
-- POSIX-inspired syntax (pipes, arguments, redirection)
-- Virtual filesystem (no host OS access)
-- User-defined command registry
-- Automatic escaping of interpolated values
-- Streaming pipelines via async iteration
+const vol = new Volume();
+vol.fromJSON({ "/data.txt": "foo\nbar\nbaz\n" });
+
+const sh = createShellDSL({
+  fs: createVirtualFS(createFsFromVolume(vol)),
+  cwd: "/",
+  env: { USER: "alice" },
+  commands: builtinCommands,
+});
+
+const count = await sh`cat /data.txt | grep foo | wc -l`.text();
+console.log(count.trim()); // "1"
+```
 
 ## Installation
 
 ```bash
-bun install
+bun add shell-dsl memfs
 ```
 
-## Usage
+## Features
+
+- **Sandboxed execution** — No host OS access; all commands run in-process
+- **Virtual filesystem** — Uses memfs for complete isolation from the real filesystem
+- **Explicit command registry** — Only registered commands can execute
+- **Automatic escaping** — Interpolated values are escaped by default for safety
+- **POSIX-inspired syntax** — Pipes, redirects, control flow operators, and more
+- **Streaming pipelines** — Commands communicate via async iteration
+- **TypeScript-first** — Full type definitions included
+
+## Getting Started
+
+Create a `ShellDSL` instance by providing a virtual filesystem, working directory, environment variables, and a command registry:
 
 ```ts
-import { ShellDSL } from "shell-dsl";
-import { memfs } from "memfs";
+import { createShellDSL, createVirtualFS } from "shell-dsl";
+import { createFsFromVolume, Volume } from "memfs";
+import { builtinCommands } from "shell-dsl/commands";
 
-const sh = new ShellDSL({
-  fs: memfs(),
+const vol = new Volume();
+const sh = createShellDSL({
+  fs: createVirtualFS(createFsFromVolume(vol)),
   cwd: "/",
-  env: { PATH: "/bin" },
-  commands: { grep, cat, echo, wc },
+  env: { USER: "alice", HOME: "/home/alice" },
+  commands: builtinCommands,
 });
 
-const result = await sh`cat data.txt | grep ${pattern} | wc -l`.text();
+const greeting = await sh`echo "Hello, $USER"`.text();
+console.log(greeting); // "Hello, alice\n"
 ```
 
 ## Output Methods
 
-```ts
-await sh`echo hi`.text();           // "hi\n"
-await sh`cat config.json`.json();   // { ... }
-await sh`cat log.txt`.lines();      // AsyncIterable<string>
-await sh`cat data.bin`.buffer();    // Buffer
-```
-
-## Pipelines & Control Flow
+Every shell command returns a `ShellPromise` that can be consumed in different formats:
 
 ```ts
-// Pipelines
-await sh`cat data.txt | grep foo | wc -l`;
+// String output
+await sh`echo hello`.text();           // "hello\n"
 
-// Sequential execution
-await sh`echo one; echo two; echo three`;
+// Parsed JSON
+await sh`cat config.json`.json();      // { key: "value" }
 
-// AND/OR operators
-await sh`test -f config.json && cat config.json`;
-await sh`cat config.json || echo "default"`;
-```
+// Async line iterator
+for await (const line of sh`cat data.txt`.lines()) {
+  console.log(line);
+}
 
-## Redirection
+// Raw Buffer
+await sh`cat binary.dat`.buffer();     // Buffer
 
-```ts
-await sh`cat < input.txt`;          // stdin from file
-await sh`echo hi > out.txt`;        // stdout to file
-await sh`echo hi >> out.txt`;       // append
-await sh`cmd 2> errors.txt`;        // stderr to file
-await sh`cmd &> all.txt`;           // both to file
+// Blob
+await sh`cat image.png`.blob();        // Blob
 ```
 
 ## Error Handling
 
+By default, commands with non-zero exit codes throw a `ShellError`:
+
 ```ts
+import { ShellError } from "shell-dsl";
+
 try {
-  await sh`cat missing.txt`;
+  await sh`cat /nonexistent`;
 } catch (err) {
   if (err instanceof ShellError) {
-    console.log(err.exitCode);
-    console.log(err.stderr.toString());
+    console.log(err.exitCode);          // 1
+    console.log(err.stderr.toString()); // "cat: /nonexistent: ..."
+    console.log(err.stdout.toString()); // ""
   }
 }
-
-// Disable throwing
-await sh`cmd`.nothrow();
 ```
 
-## Defining Commands
+### Disabling Throws
+
+Use `.nothrow()` to suppress throwing for a single command:
+
+```ts
+const result = await sh`cat /nonexistent`.nothrow();
+console.log(result.exitCode); // 1
+```
+
+Use `.throws(boolean)` for explicit control:
+
+```ts
+const result = await sh`cat /nonexistent`.throws(false);
+```
+
+### Global Throw Setting
+
+Disable throwing globally with `sh.throws(false)`:
+
+```ts
+sh.throws(false);
+const result = await sh`cat /nonexistent`;
+console.log(result.exitCode); // 1
+
+// Per-command override still works
+await sh`cat /nonexistent`.throws(true); // This throws
+```
+
+## Piping
+
+Use `|` to connect commands. Data flows between commands via async streams:
+
+```ts
+const result = await sh`cat /data.txt | grep pattern | wc -l`.text();
+```
+
+Each command in the pipeline receives the previous command's stdout as its stdin.
+
+## Control Flow Operators
+
+### Sequential Execution (`;`)
+
+Run commands one after another, regardless of exit codes:
+
+```ts
+await sh`echo one; echo two; echo three`.text();
+// "one\ntwo\nthree\n"
+```
+
+### AND Operator (`&&`)
+
+Run the next command only if the previous one succeeds (exit code 0):
+
+```ts
+await sh`test -f /config.json && cat /config.json`;
+```
+
+### OR Operator (`||`)
+
+Run the next command only if the previous one fails (non-zero exit code):
+
+```ts
+await sh`cat /config.json || echo "default config"`;
+```
+
+### Combined Operators
+
+```ts
+await sh`mkdir -p /out && echo "created" || echo "failed"`;
+```
+
+## Redirection
+
+### Input Redirection (`<`)
+
+Read stdin from a file:
+
+```ts
+await sh`cat < /input.txt`.text();
+```
+
+### Output Redirection (`>`, `>>`)
+
+Write stdout to a file:
+
+```ts
+// Overwrite
+await sh`echo "content" > /output.txt`;
+
+// Append
+await sh`echo "more" >> /output.txt`;
+```
+
+### Stderr Redirection (`2>`, `2>>`)
+
+```ts
+await sh`cmd 2> /errors.txt`;    // stderr to file
+await sh`cmd 2>> /errors.txt`;   // append stderr
+```
+
+### File Descriptor Redirects
+
+| Redirect | Effect |
+|----------|--------|
+| `2>&1` | Redirect stderr to stdout |
+| `1>&2` | Redirect stdout to stderr |
+| `&>` | Redirect both stdout and stderr to file |
+| `&>>` | Append both stdout and stderr to file |
+
+```ts
+// Capture both stdout and stderr
+const result = await sh`cmd 2>&1`.text();
+
+// Write both to file
+await sh`cmd &> /all-output.txt`;
+```
+
+## Environment Variables
+
+### Variable Expansion
+
+Variables are expanded with `$VAR` or `${VAR}` syntax:
+
+```ts
+const sh = createShellDSL({
+  // ...
+  env: { USER: "alice", HOME: "/home/alice" },
+});
+
+await sh`echo $USER`.text();        // "alice\n"
+await sh`echo "Home: $HOME"`.text(); // "Home: /home/alice\n"
+```
+
+### Quoting Semantics
+
+| Quote | Behavior |
+|-------|----------|
+| `"..."` | Variables expanded, special chars preserved |
+| `'...'` | Literal string, no expansion |
+
+```ts
+await sh`echo "Hello $USER"`.text();  // "Hello alice\n"
+await sh`echo 'Hello $USER'`.text();  // "Hello $USER\n"
+```
+
+### Inline Assignment
+
+Assign variables for subsequent commands:
+
+```ts
+await sh`FOO=bar && echo $FOO`.text();  // "bar\n"
+```
+
+Assign variables for a single command (scoped):
+
+```ts
+await sh`FOO=bar echo $FOO`.text();     // "bar\n"
+// FOO is not set after this command
+```
+
+### Per-Command Environment
+
+Override environment for a single command:
+
+```ts
+await sh`echo $CUSTOM`.env({ CUSTOM: "value" }).text();
+```
+
+### Global Environment
+
+Set environment variables globally:
+
+```ts
+sh.env({ API_KEY: "secret" });
+await sh`echo $API_KEY`.text();  // "secret\n"
+
+sh.resetEnv();  // Restore initial environment
+```
+
+## Glob Expansion
+
+Globs are expanded by the interpreter before command execution:
+
+```ts
+await sh`ls *.txt`;           // Matches: a.txt, b.txt, ...
+await sh`cat src/**/*.ts`;    // Recursive glob
+await sh`echo file[123].txt`; // Character classes
+await sh`echo {a,b,c}.txt`;   // Brace expansion: a.txt b.txt c.txt
+```
+
+## Command Substitution
+
+Use `$(command)` to capture command output:
+
+```ts
+await sh`echo "Current dir: $(pwd)"`.text();
+```
+
+Nested substitution is supported:
+
+```ts
+await sh`echo "Files: $(ls $(pwd))"`.text();
+```
+
+## Defining Custom Commands
+
+Commands are async functions that receive a `CommandContext` and return an exit code (0 = success):
+
+```ts
+import type { Command } from "shell-dsl";
+
+const hello: Command = async (ctx) => {
+  const name = ctx.args[0] ?? "World";
+  await ctx.stdout.writeText(`Hello, ${name}!\n`);
+  return 0;
+};
+
+const sh = createShellDSL({
+  // ...
+  commands: { ...builtinCommands, hello },
+});
+
+await sh`hello Alice`.text();  // "Hello, Alice!\n"
+```
+
+### CommandContext Interface
+
+```ts
+interface CommandContext {
+  args: string[];                    // Command arguments
+  stdin: Stdin;                      // Input stream
+  stdout: Stdout;                    // Output stream
+  stderr: Stderr;                    // Error stream
+  fs: VirtualFS;                     // Virtual filesystem
+  cwd: string;                       // Current working directory
+  env: Record<string, string>;       // Environment variables
+}
+```
+
+### Stdin Interface
+
+```ts
+interface Stdin {
+  stream(): AsyncIterable<Uint8Array>;  // Raw byte stream
+  buffer(): Promise<Buffer>;             // All input as Buffer
+  text(): Promise<string>;               // All input as string
+  lines(): AsyncIterable<string>;        // Line-by-line iterator
+}
+```
+
+### Stdout/Stderr Interface
+
+```ts
+interface Stdout {
+  write(chunk: Uint8Array): Promise<void>;  // Write bytes
+  writeText(str: string): Promise<void>;    // Write UTF-8 string
+}
+```
+
+### Example: echo
 
 ```ts
 const echo: Command = async (ctx) => {
   await ctx.stdout.writeText(ctx.args.join(" ") + "\n");
   return 0;
 };
+```
+
+### Example: cat
+
+Read from stdin or files:
+
+```ts
+const cat: Command = async (ctx) => {
+  if (ctx.args.length === 0) {
+    // Read from stdin
+    for await (const chunk of ctx.stdin.stream()) {
+      await ctx.stdout.write(chunk);
+    }
+  } else {
+    // Read from files
+    for (const file of ctx.args) {
+      const path = ctx.fs.resolve(ctx.cwd, file);
+      const content = await ctx.fs.readFile(path);
+      await ctx.stdout.write(new Uint8Array(content));
+    }
+  }
+  return 0;
+};
+```
+
+### Example: grep
+
+Pattern matching with stdin:
+
+```ts
+const grep: Command = async (ctx) => {
+  const pattern = ctx.args[0];
+  if (!pattern) {
+    await ctx.stderr.writeText("grep: missing pattern\n");
+    return 1;
+  }
+
+  const regex = new RegExp(pattern);
+  let found = false;
+
+  for await (const line of ctx.stdin.lines()) {
+    if (regex.test(line)) {
+      await ctx.stdout.writeText(line + "\n");
+      found = true;
+    }
+  }
+
+  return found ? 0 : 1;
+};
+```
+
+### Example: Custom uppercase command
+
+```ts
+const upper: Command = async (ctx) => {
+  const text = await ctx.stdin.text();
+  await ctx.stdout.writeText(text.toUpperCase());
+  return 0;
+};
+
+// Usage
+await sh`echo "hello" | upper`.text();  // "HELLO\n"
+```
+
+## Built-in Commands
+
+Import all built-in commands:
+
+```ts
+import { builtinCommands } from "shell-dsl/commands";
+```
+
+Or import individually:
+
+```ts
+import { echo, cat, grep, wc } from "shell-dsl/commands";
+```
+
+| Command | Description |
+|---------|-------------|
+| `echo` | Print arguments to stdout |
+| `cat` | Concatenate files or stdin to stdout |
+| `grep` | Search for patterns (supports `-v`, `-i`, `-n`, `-c`) |
+| `wc` | Count lines, words, or characters (`-l`, `-w`, `-c`) |
+| `head` | Output first lines (`-n`) |
+| `tail` | Output last lines (`-n`) |
+| `sort` | Sort lines (`-r` reverse, `-n` numeric) |
+| `uniq` | Remove duplicate adjacent lines (`-c` count) |
+| `pwd` | Print working directory |
+| `ls` | List directory contents |
+| `mkdir` | Create directories (`-p` parents) |
+| `rm` | Remove files/directories (`-r` recursive, `-f` force) |
+| `test` / `[` | File and string tests (`-f`, `-d`, `-e`, `-z`, `-n`, `=`, `!=`) |
+| `true` | Exit with code 0 |
+| `false` | Exit with code 1 |
+
+## Virtual Filesystem
+
+The `VirtualFS` interface wraps memfs for sandboxed file operations:
+
+```ts
+import { createVirtualFS } from "shell-dsl";
+import { createFsFromVolume, Volume } from "memfs";
+
+const vol = new Volume();
+vol.fromJSON({
+  "/data.txt": "file content",
+  "/config.json": '{"key": "value"}',
+});
+
+const fs = createVirtualFS(createFsFromVolume(vol));
+```
+
+### VirtualFS Interface
+
+```ts
+interface VirtualFS {
+  // Reading
+  readFile(path: string): Promise<Buffer>;
+  readdir(path: string): Promise<string[]>;
+  stat(path: string): Promise<FileStat>;
+  exists(path: string): Promise<boolean>;
+
+  // Writing
+  writeFile(path: string, data: Buffer | string): Promise<void>;
+  appendFile(path: string, data: Buffer | string): Promise<void>;
+  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
+
+  // Deletion
+  rm(path: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void>;
+
+  // Utilities
+  resolve(...paths: string[]): string;
+  dirname(path: string): string;
+  basename(path: string): string;
+  glob(pattern: string, opts?: { cwd?: string }): Promise<string[]>;
+}
+```
+
+## Low-Level API
+
+For advanced use cases (custom tooling, AST inspection):
+
+```ts
+// Tokenize shell source
+const tokens = sh.lex("cat foo | grep bar");
+
+// Parse tokens into AST
+const ast = sh.parse(tokens);
+
+// Compile AST to executable program
+const program = sh.compile(ast);
+
+// Execute a compiled program
+const result = await sh.run(program);
+```
+
+### Manual Escaping
+
+```ts
+sh.escape("hello world");    // "'hello world'"
+sh.escape("$(rm -rf /)");    // "'$(rm -rf /)'"
+sh.escape("safe");           // "safe"
+```
+
+### Raw Escape Hatch
+
+Bypass escaping for trusted input:
+
+```ts
+await sh`echo ${{ raw: "$(date)" }}`.text();
+```
+
+**Warning:** Use `{ raw: ... }` with extreme caution when handling untrusted input.
+
+## Safety & Security
+
+1. **No host access** — All commands run in-process against a virtual filesystem
+2. **Automatic escaping** — Interpolated values are escaped by default
+3. **Explicit command registry** — Only registered commands can execute
+4. **No shell spawning** — Never invokes `/bin/sh` or similar
+
+The `{ raw: ... }` escape hatch exists for advanced use cases but should be used with extreme caution.
+
+## TypeScript Types
+
+Key exported types:
+
+```ts
+import type {
+  Command,
+  CommandContext,
+  Stdin,
+  Stdout,
+  Stderr,
+  VirtualFS,
+  FileStat,
+  ExecResult,
+  ShellConfig,
+  RawValue,
+} from "shell-dsl";
 ```
 
 ## Running Tests
