@@ -25,7 +25,13 @@ export type ASTNode =
   | VariableNode
   | SubstitutionNode
   | GlobNode
-  | ConcatNode;
+  | ConcatNode
+  | IfNode
+  | ForNode
+  | WhileNode
+  | UntilNode
+  | CaseNode
+  | ArithmeticNode;
 
 export interface CommandNode {
   type: "command";
@@ -82,6 +88,49 @@ export interface ConcatNode {
   parts: ASTNode[];
 }
 
+export interface IfNode {
+  type: "if";
+  condition: ASTNode;
+  thenBranch: ASTNode;
+  elifBranches: Array<{ condition: ASTNode; body: ASTNode }>;
+  elseBranch?: ASTNode;
+}
+
+export interface ForNode {
+  type: "for";
+  variable: string;
+  items: ASTNode[];
+  body: ASTNode;
+}
+
+export interface WhileNode {
+  type: "while";
+  condition: ASTNode;
+  body: ASTNode;
+}
+
+export interface UntilNode {
+  type: "until";
+  condition: ASTNode;
+  body: ASTNode;
+}
+
+export interface CaseClause {
+  patterns: ASTNode[];
+  body: ASTNode;
+}
+
+export interface CaseNode {
+  type: "case";
+  word: ASTNode;
+  clauses: CaseClause[];
+}
+
+export interface ArithmeticNode {
+  type: "arithmetic";
+  expression: string;
+}
+
 // Type guards
 export function isCommandNode(node: ASTNode): node is CommandNode {
   return node.type === "command";
@@ -121,4 +170,28 @@ export function isGlobNode(node: ASTNode): node is GlobNode {
 
 export function isConcatNode(node: ASTNode): node is ConcatNode {
   return node.type === "concat";
+}
+
+export function isIfNode(node: ASTNode): node is IfNode {
+  return node.type === "if";
+}
+
+export function isForNode(node: ASTNode): node is ForNode {
+  return node.type === "for";
+}
+
+export function isWhileNode(node: ASTNode): node is WhileNode {
+  return node.type === "while";
+}
+
+export function isUntilNode(node: ASTNode): node is UntilNode {
+  return node.type === "until";
+}
+
+export function isCaseNode(node: ASTNode): node is CaseNode {
+  return node.type === "case";
+}
+
+export function isArithmeticNode(node: ASTNode): node is ArithmeticNode {
+  return node.type === "arithmetic";
 }

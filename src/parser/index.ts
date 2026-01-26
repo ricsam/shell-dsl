@@ -13,6 +13,13 @@ export type {
   SubstitutionNode,
   GlobNode,
   ConcatNode,
+  IfNode,
+  ForNode,
+  WhileNode,
+  UntilNode,
+  CaseNode,
+  CaseClause,
+  ArithmeticNode,
 } from "./ast.ts";
 export {
   isCommandNode,
@@ -25,4 +32,10 @@ export {
   isSubstitutionNode,
   isGlobNode,
   isConcatNode,
+  isIfNode,
+  isForNode,
+  isWhileNode,
+  isUntilNode,
+  isCaseNode,
+  isArithmeticNode,
 } from "./ast.ts";

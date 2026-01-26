@@ -1,5 +1,6 @@
 import { LexError } from "../errors.ts";
-import type { Token, RedirectMode } from "./tokens.ts";
+import type { Token, RedirectMode, KeywordValue } from "./tokens.ts";
+import { KEYWORDS } from "./tokens.ts";
 
 const GLOB_CHARS = new Set(["*", "?", "[", "{", "}"]);
 const WORD_BREAK_CHARS = new Set([
@@ -26,9 +27,11 @@ export class Lexer {
   private line: number = 1;
   private column: number = 1;
   private tokenQueue: Token[] = [];
+  private preserveNewlines: boolean;
 
-  constructor(source: string) {
+  constructor(source: string, options?: { preserveNewlines?: boolean }) {
     this.source = source;
+    this.preserveNewlines = options?.preserveNewlines ?? false;
   }
 
   tokenize(): Token[] {
@@ -41,7 +44,7 @@ export class Lexer {
         continue;
       }
 
-      this.skipWhitespace();
+      this.skipWhitespaceExceptNewlines();
       if (this.isAtEnd()) break;
 
       const token = this.nextToken();
@@ -62,10 +65,34 @@ export class Lexer {
 
     const char = this.peek();
 
+    // Newlines - significant for control flow
+    if (char === "\n") {
+      this.advance();
+      // Skip consecutive newlines
+      while (this.peek() === "\n") {
+        this.advance();
+      }
+      if (this.preserveNewlines) {
+        return { type: "newline" };
+      }
+      return null;
+    }
+
     // Comments
     if (char === "#") {
       this.skipComment();
       return null;
+    }
+
+    // Parentheses - for case pattern grouping
+    if (char === "(") {
+      this.advance();
+      return { type: "openParen" };
+    }
+
+    if (char === ")") {
+      this.advance();
+      return { type: "closeParen" };
     }
 
     // Operators and redirects
@@ -98,6 +125,11 @@ export class Lexer {
 
     if (char === ";") {
       this.advance();
+      // Check for double semicolon (case terminator)
+      if (this.peek() === ";") {
+        this.advance();
+        return { type: "doubleSemicolon" };
+      }
       return { type: "semicolon" };
     }
 
@@ -176,9 +208,15 @@ export class Lexer {
   private readVariable(): Token {
     this.advance(); // consume $
 
-    // Command substitution $(...)
+    // Arithmetic expansion $((...)) or command substitution $(...)
     if (this.peek() === "(") {
-      this.advance(); // consume (
+      this.advance(); // consume first (
+      // Check for arithmetic expansion $((...))
+      if (this.peek() === "(") {
+        this.advance(); // consume second (
+        const expression = this.readUntilDoubleCloseParen();
+        return { type: "arithmetic", expression };
+      }
       const command = this.readUntilMatchingParen();
       return { type: "substitution", command };
     }
@@ -207,6 +245,33 @@ export class Lexer {
     }
 
     return { type: "variable", name };
+  }
+
+  private readUntilDoubleCloseParen(): string {
+    let depth = 1;
+    let result = "";
+
+    while (!this.isAtEnd() && depth > 0) {
+      const char = this.peek();
+      if (char === "(" && this.peekAhead(1) === "(") {
+        depth++;
+        result += this.advance();
+        result += this.advance();
+      } else if (char === ")" && this.peekAhead(1) === ")") {
+        depth--;
+        if (depth === 0) {
+          this.advance(); // consume first )
+          this.advance(); // consume second )
+          break;
+        }
+        result += this.advance();
+        result += this.advance();
+      } else {
+        result += this.advance();
+      }
+    }
+
+    return result;
   }
 
   private readUntilMatchingParen(): string {
@@ -310,14 +375,40 @@ export class Lexer {
       }
     }
 
+    // Check if this looks like an assignment with value starting with $ or quote
+    // e.g., VAR=$(...) or VAR="..." or VAR='...'
+    const assignmentPrefixMatch = value.match(/^([a-zA-Z_][a-zA-Z0-9_]*)=$/);
+    if (assignmentPrefixMatch && (this.peek() === "$" || this.peek() === "'" || this.peek() === '"')) {
+      const name = assignmentPrefixMatch[1]!;
+      // Read the value part
+      const valueTokens = this.readAssignmentValueTokens();
+      return {
+        type: "assignment",
+        name,
+        value: valueTokens.length === 1 && valueTokens[0]!.type === "word"
+          ? (valueTokens[0] as { type: "word"; value: string }).value
+          : valueTokens,
+      };
+    }
+
     // Check if this is an assignment (VAR=value)
     const assignmentMatch = value.match(/^([a-zA-Z_][a-zA-Z0-9_]*)=(.*)$/);
     if (assignmentMatch) {
+      const name = assignmentMatch[1]!;
+      const rawValue = assignmentMatch[2]!;
+
+      // Parse the value to handle variables and arithmetic
+      const parsedValue = this.parseAssignmentValue(rawValue);
       return {
         type: "assignment",
-        name: assignmentMatch[1]!,
-        value: assignmentMatch[2]!,
+        name,
+        value: parsedValue,
       };
+    }
+
+    // Check if this is a keyword
+    if (KEYWORDS.has(value)) {
+      return { type: "keyword", value: value as KeywordValue };
     }
 
     if (hasGlobChars) {
@@ -325,6 +416,149 @@ export class Lexer {
     }
 
     return { type: "word", value };
+  }
+
+  private readAssignmentValueTokens(): Token[] {
+    const tokens: Token[] = [];
+
+    // Read tokens until we hit a space, newline, semicolon, etc.
+    while (!this.isAtEnd()) {
+      const char = this.peek();
+
+      // Stop at whitespace or command terminators
+      if (char === " " || char === "\t" || char === "\n" || char === "\r" ||
+          char === ";" || char === "|" || char === "&" || char === ">" || char === "<") {
+        break;
+      }
+
+      if (char === "$") {
+        tokens.push(this.readVariable());
+      } else if (char === "'") {
+        tokens.push(this.readSingleQuote());
+      } else if (char === '"') {
+        tokens.push(this.readDoubleQuote());
+      } else {
+        // Read until word break
+        let word = "";
+        while (!this.isAtEnd() && !this.isWordBreak(this.peek())) {
+          word += this.advance();
+        }
+        if (word) {
+          tokens.push({ type: "word", value: word });
+        } else {
+          break;
+        }
+      }
+    }
+
+    return tokens;
+  }
+
+  private parseAssignmentValue(value: string): string | Token[] {
+    // If value contains no special characters, return as string
+    if (!value.includes("$")) {
+      return value;
+    }
+
+    // Parse the value to handle $VAR, ${VAR}, $((expr))
+    const tokens: Token[] = [];
+    let i = 0;
+    let currentString = "";
+
+    while (i < value.length) {
+      if (value[i] === "$") {
+        if (currentString) {
+          tokens.push({ type: "word", value: currentString });
+          currentString = "";
+        }
+
+        i++; // consume $
+        if (i >= value.length) {
+          tokens.push({ type: "word", value: "$" });
+          break;
+        }
+
+        // Arithmetic expansion $((expr))
+        if (value[i] === "(" && value[i + 1] === "(") {
+          i += 2; // consume ((
+          let depth = 1;
+          let expr = "";
+          while (i < value.length && depth > 0) {
+            if (value[i] === "(" && value[i + 1] === "(") {
+              depth++;
+              expr += value[i]! + value[i + 1]!;
+              i += 2;
+            } else if (value[i] === ")" && value[i + 1] === ")") {
+              depth--;
+              if (depth > 0) {
+                expr += value[i]! + value[i + 1]!;
+                i += 2;
+              } else {
+                i += 2; // consume ))
+              }
+            } else {
+              expr += value[i];
+              i++;
+            }
+          }
+          tokens.push({ type: "arithmetic", expression: expr });
+        }
+        // ${VAR} syntax
+        else if (value[i] === "{") {
+          i++; // consume {
+          let varName = "";
+          while (i < value.length && value[i] !== "}") {
+            varName += value[i];
+            i++;
+          }
+          if (i < value.length && value[i] === "}") {
+            i++; // consume }
+          }
+          tokens.push({ type: "variable", name: varName });
+        }
+        // $VAR syntax
+        else if (/[a-zA-Z_]/.test(value[i]!)) {
+          let varName = "";
+          while (i < value.length && /[a-zA-Z0-9_]/.test(value[i]!)) {
+            varName += value[i];
+            i++;
+          }
+          tokens.push({ type: "variable", name: varName });
+        }
+        // $(cmd) command substitution
+        else if (value[i] === "(") {
+          i++; // consume (
+          let depth = 1;
+          let cmd = "";
+          while (i < value.length && depth > 0) {
+            if (value[i] === "(") depth++;
+            else if (value[i] === ")") depth--;
+            if (depth > 0) {
+              cmd += value[i];
+            }
+            i++;
+          }
+          tokens.push({ type: "substitution", command: cmd });
+        }
+        else {
+          // Not a variable, just a $
+          currentString += "$";
+        }
+      } else {
+        currentString += value[i];
+        i++;
+      }
+    }
+
+    if (currentString) {
+      tokens.push({ type: "word", value: currentString });
+    }
+
+    if (tokens.length === 1 && tokens[0]!.type === "word") {
+      return (tokens[0] as { type: "word"; value: string }).value;
+    }
+
+    return tokens.length > 0 ? tokens : value;
   }
 
   private readHeredoc(): Token {
@@ -518,6 +752,12 @@ export class Lexer {
     }
   }
 
+  private skipWhitespaceExceptNewlines(): void {
+    while (!this.isAtEnd() && /[ \t\r]/.test(this.peek())) {
+      this.advance();
+    }
+  }
+
   private skipComment(): void {
     while (!this.isAtEnd() && this.peek() !== "\n") {
       this.advance();
@@ -549,6 +789,6 @@ export class Lexer {
   }
 }
 
-export function lex(source: string): Token[] {
-  return new Lexer(source).tokenize();
+export function lex(source: string, options?: { preserveNewlines?: boolean }): Token[] {
+  return new Lexer(source, options).tokenize();
 }

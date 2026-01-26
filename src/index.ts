@@ -40,6 +40,13 @@ export type {
   SubstitutionNode,
   GlobNode,
   ConcatNode,
+  IfNode,
+  ForNode,
+  WhileNode,
+  UntilNode,
+  CaseNode,
+  CaseClause,
+  ArithmeticNode,
 } from "./parser/index.ts";
 export {
   isCommandNode,
@@ -52,10 +59,16 @@ export {
   isSubstitutionNode,
   isGlobNode,
   isConcatNode,
+  isIfNode,
+  isForNode,
+  isWhileNode,
+  isUntilNode,
+  isCaseNode,
+  isArithmeticNode,
 } from "./parser/index.ts";
 
 // Interpreter
-export { Interpreter, type InterpreterOptions } from "./interpreter/index.ts";
+export { Interpreter, type InterpreterOptions, BreakException, ContinueException } from "./interpreter/index.ts";
 
 // Filesystem
 export { createVirtualFS } from "./fs/index.ts";

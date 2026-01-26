@@ -1,4 +1,4 @@
-import type { ASTNode, CommandNode, Redirect } from "../parser/ast.ts";
+import type { ASTNode, CommandNode, Redirect, IfNode, ForNode, WhileNode, UntilNode, CaseNode } from "../parser/ast.ts";
 import type { Command, VirtualFS, ExecResult, OutputCollector, RedirectObjectMap } from "../types.ts";
 import { createCommandContext } from "./context.ts";
 import { createStdin } from "../io/stdin.ts";
@@ -14,12 +14,26 @@ export interface InterpreterOptions {
   redirectObjects?: RedirectObjectMap;
 }
 
+// Loop control flow exceptions
+export class BreakException extends Error {
+  constructor(public levels: number = 1) {
+    super("break");
+  }
+}
+
+export class ContinueException extends Error {
+  constructor(public levels: number = 1) {
+    super("continue");
+  }
+}
+
 export class Interpreter {
   private fs: VirtualFS;
   private cwd: string;
   private env: Record<string, string>;
   private commands: Record<string, Command>;
   private redirectObjects: RedirectObjectMap;
+  private loopDepth: number = 0;
 
   constructor(options: InterpreterOptions) {
     this.fs = options.fs;
@@ -27,6 +41,10 @@ export class Interpreter {
     this.env = { ...options.env };
     this.commands = options.commands;
     this.redirectObjects = options.redirectObjects ?? {};
+  }
+
+  getLoopDepth(): number {
+    return this.loopDepth;
   }
 
   async execute(ast: ASTNode): Promise<ExecResult> {
@@ -62,6 +80,16 @@ export class Interpreter {
         return this.executeAnd(node.left, node.right, stdinSource, stdout, stderr);
       case "or":
         return this.executeOr(node.left, node.right, stdinSource, stdout, stderr);
+      case "if":
+        return this.executeIf(node, stdinSource, stdout, stderr);
+      case "for":
+        return this.executeFor(node, stdinSource, stdout, stderr);
+      case "while":
+        return this.executeWhile(node, stdinSource, stdout, stderr);
+      case "until":
+        return this.executeUntil(node, stdinSource, stdout, stderr);
+      case "case":
+        return this.executeCase(node, stdinSource, stdout, stderr);
       default:
         throw new Error(`Cannot execute node type: ${node.type}`);
     }
@@ -161,6 +189,10 @@ export class Interpreter {
     try {
       exitCode = await command(ctx);
     } catch (err) {
+      // Re-throw loop control exceptions
+      if (err instanceof BreakException || err instanceof ContinueException) {
+        throw err;
+      }
       const message = err instanceof Error ? err.message : String(err);
       await stderr.writeText(`${name}: ${message}\n`);
       exitCode = 1;
@@ -450,6 +482,247 @@ export class Interpreter {
     return this.executeNode(right, stdinSource, stdout, stderr);
   }
 
+  private async executeIf(
+    node: IfNode,
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector
+  ): Promise<number> {
+    // Execute condition
+    const conditionCode = await this.executeNode(node.condition, stdinSource, stdout, stderr);
+
+    if (conditionCode === 0) {
+      // Condition succeeded, execute then branch
+      return this.executeNode(node.thenBranch, stdinSource, stdout, stderr);
+    }
+
+    // Check elif branches
+    for (const elif of node.elifBranches) {
+      const elifConditionCode = await this.executeNode(elif.condition, stdinSource, stdout, stderr);
+      if (elifConditionCode === 0) {
+        return this.executeNode(elif.body, stdinSource, stdout, stderr);
+      }
+    }
+
+    // Execute else branch if present
+    if (node.elseBranch) {
+      return this.executeNode(node.elseBranch, stdinSource, stdout, stderr);
+    }
+
+    return 0;
+  }
+
+  private async executeFor(
+    node: ForNode,
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector
+  ): Promise<number> {
+    // Evaluate items and expand globs
+    const expandedItems: string[] = [];
+    for (const item of node.items) {
+      const evaluated = await this.evaluateNode(item);
+      if (item.type === "glob") {
+        const matches = await this.fs.glob(evaluated, { cwd: this.cwd });
+        if (matches.length > 0) {
+          expandedItems.push(...matches);
+        } else {
+          expandedItems.push(evaluated);
+        }
+      } else {
+        expandedItems.push(evaluated);
+      }
+    }
+
+    // If no items provided, use positional parameters (not implemented, so empty)
+    if (expandedItems.length === 0) {
+      return 0;
+    }
+
+    let lastExitCode = 0;
+    this.loopDepth++;
+
+    try {
+      for (const value of expandedItems) {
+        // Set the loop variable
+        this.env[node.variable] = value;
+
+        try {
+          lastExitCode = await this.executeNode(node.body, stdinSource, stdout, stderr);
+        } catch (e) {
+          if (e instanceof ContinueException) {
+            if (e.levels > 1) {
+              e.levels--;
+              throw e;
+            }
+            continue;
+          }
+          if (e instanceof BreakException) {
+            if (e.levels > 1) {
+              e.levels--;
+              throw e;
+            }
+            break;
+          }
+          throw e;
+        }
+      }
+    } finally {
+      this.loopDepth--;
+    }
+
+    return lastExitCode;
+  }
+
+  private async executeWhile(
+    node: WhileNode,
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector
+  ): Promise<number> {
+    let lastExitCode = 0;
+    this.loopDepth++;
+
+    try {
+      while (true) {
+        // Check condition
+        const conditionCode = await this.executeNode(node.condition, stdinSource, stdout, stderr);
+        if (conditionCode !== 0) {
+          break;
+        }
+
+        try {
+          lastExitCode = await this.executeNode(node.body, stdinSource, stdout, stderr);
+        } catch (e) {
+          if (e instanceof ContinueException) {
+            if (e.levels > 1) {
+              e.levels--;
+              throw e;
+            }
+            continue;
+          }
+          if (e instanceof BreakException) {
+            if (e.levels > 1) {
+              e.levels--;
+              throw e;
+            }
+            break;
+          }
+          throw e;
+        }
+      }
+    } finally {
+      this.loopDepth--;
+    }
+
+    return lastExitCode;
+  }
+
+  private async executeUntil(
+    node: UntilNode,
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector
+  ): Promise<number> {
+    let lastExitCode = 0;
+    this.loopDepth++;
+
+    try {
+      while (true) {
+        // Check condition - loop until condition succeeds
+        const conditionCode = await this.executeNode(node.condition, stdinSource, stdout, stderr);
+        if (conditionCode === 0) {
+          break;
+        }
+
+        try {
+          lastExitCode = await this.executeNode(node.body, stdinSource, stdout, stderr);
+        } catch (e) {
+          if (e instanceof ContinueException) {
+            if (e.levels > 1) {
+              e.levels--;
+              throw e;
+            }
+            continue;
+          }
+          if (e instanceof BreakException) {
+            if (e.levels > 1) {
+              e.levels--;
+              throw e;
+            }
+            break;
+          }
+          throw e;
+        }
+      }
+    } finally {
+      this.loopDepth--;
+    }
+
+    return lastExitCode;
+  }
+
+  private async executeCase(
+    node: CaseNode,
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector
+  ): Promise<number> {
+    const word = await this.evaluateNode(node.word);
+
+    for (const clause of node.clauses) {
+      for (const patternNode of clause.patterns) {
+        const pattern = await this.evaluateNode(patternNode);
+
+        if (this.matchCasePattern(word, pattern)) {
+          return this.executeNode(clause.body, stdinSource, stdout, stderr);
+        }
+      }
+    }
+
+    return 0;
+  }
+
+  private matchCasePattern(word: string, pattern: string): boolean {
+    // Convert shell glob pattern to regex
+    // * matches any string, ? matches any single character
+    let regexStr = "^";
+    for (let i = 0; i < pattern.length; i++) {
+      const char = pattern[i];
+      if (char === "*") {
+        regexStr += ".*";
+      } else if (char === "?") {
+        regexStr += ".";
+      } else if (char === "[") {
+        // Character class - find closing bracket
+        let j = i + 1;
+        while (j < pattern.length && pattern[j] !== "]") {
+          j++;
+        }
+        if (j < pattern.length) {
+          regexStr += pattern.slice(i, j + 1);
+          i = j;
+        } else {
+          regexStr += "\\[";
+        }
+      } else if (/[.+^${}()|\\]/.test(char!)) {
+        // Escape regex special characters
+        regexStr += "\\" + char;
+      } else {
+        regexStr += char;
+      }
+    }
+    regexStr += "$";
+
+    try {
+      const regex = new RegExp(regexStr);
+      return regex.test(word);
+    } catch {
+      // If regex fails, fall back to exact match
+      return word === pattern;
+    }
+  }
+
   private async evaluateNode(node: ASTNode, localEnv?: Record<string, string>): Promise<string> {
     const env = localEnv ?? this.env;
     switch (node.type) {
@@ -473,9 +746,189 @@ export class Interpreter {
         // Trim trailing newlines
         return output.toString("utf-8").replace(/\n+$/, "");
       }
+      case "arithmetic": {
+        const result = this.evaluateArithmetic(node.expression, env);
+        return String(result);
+      }
       default:
         throw new Error(`Cannot evaluate node type: ${node.type}`);
     }
+  }
+
+  private evaluateArithmetic(expression: string, env: Record<string, string>): number {
+    // Expand variables in the expression
+    let expandedExpr = expression;
+    // Replace $VAR and ${VAR} with their values
+    expandedExpr = expandedExpr.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (_, name) => {
+      return env[name] ?? "0";
+    });
+    expandedExpr = expandedExpr.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, name) => {
+      return env[name] ?? "0";
+    });
+    // Also handle bare variable names (in arithmetic, variables can be referenced without $)
+    expandedExpr = expandedExpr.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (match) => {
+      // Don't replace if it looks like a number
+      if (/^\d+$/.test(match)) return match;
+      return env[match] ?? "0";
+    });
+
+    // Parse and evaluate the expression
+    return this.parseArithmeticExpr(expandedExpr.trim());
+  }
+
+  private parseArithmeticExpr(expr: string): number {
+    // Simple arithmetic expression parser
+    // Supports: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||, parentheses
+    // Uses a simple recursive descent parser
+
+    let pos = 0;
+
+    const skipWhitespace = () => {
+      while (pos < expr.length && /\s/.test(expr[pos]!)) pos++;
+    };
+
+    const parseNumber = (): number => {
+      skipWhitespace();
+      let numStr = "";
+      const negative = expr[pos] === "-";
+      if (negative) {
+        pos++;
+        skipWhitespace();
+      }
+      while (pos < expr.length && /[0-9]/.test(expr[pos]!)) {
+        numStr += expr[pos];
+        pos++;
+      }
+      if (numStr === "") return 0;
+      return negative ? -parseInt(numStr, 10) : parseInt(numStr, 10);
+    };
+
+    const parsePrimary = (): number => {
+      skipWhitespace();
+      if (expr[pos] === "(") {
+        pos++; // consume (
+        const result = parseOr();
+        skipWhitespace();
+        if (expr[pos] === ")") pos++; // consume )
+        return result;
+      }
+      return parseNumber();
+    };
+
+    const parseUnary = (): number => {
+      skipWhitespace();
+      if (expr[pos] === "-" && !/[0-9]/.test(expr[pos + 1] ?? "")) {
+        pos++;
+        return -parseUnary();
+      }
+      if (expr[pos] === "!") {
+        pos++;
+        return parseUnary() === 0 ? 1 : 0;
+      }
+      return parsePrimary();
+    };
+
+    const parseMulDiv = (): number => {
+      let left = parseUnary();
+      while (true) {
+        skipWhitespace();
+        const op = expr[pos];
+        if (op === "*" || op === "/" || op === "%") {
+          pos++;
+          const right = parseUnary();
+          if (op === "*") left = left * right;
+          else if (op === "/") left = right === 0 ? 0 : Math.trunc(left / right);
+          else left = right === 0 ? 0 : left % right;
+        } else {
+          break;
+        }
+      }
+      return left;
+    };
+
+    const parseAddSub = (): number => {
+      let left = parseMulDiv();
+      while (true) {
+        skipWhitespace();
+        const op = expr[pos];
+        if (op === "+" || (op === "-" && !/[0-9]/.test(expr[pos + 1] ?? ""))) {
+          pos++;
+          const right = parseMulDiv();
+          if (op === "+") left = left + right;
+          else left = left - right;
+        } else {
+          break;
+        }
+      }
+      return left;
+    };
+
+    const parseComparison = (): number => {
+      let left = parseAddSub();
+      while (true) {
+        skipWhitespace();
+        if (expr.slice(pos, pos + 2) === "<=") {
+          pos += 2;
+          const right = parseAddSub();
+          left = left <= right ? 1 : 0;
+        } else if (expr.slice(pos, pos + 2) === ">=") {
+          pos += 2;
+          const right = parseAddSub();
+          left = left >= right ? 1 : 0;
+        } else if (expr.slice(pos, pos + 2) === "==") {
+          pos += 2;
+          const right = parseAddSub();
+          left = left === right ? 1 : 0;
+        } else if (expr.slice(pos, pos + 2) === "!=") {
+          pos += 2;
+          const right = parseAddSub();
+          left = left !== right ? 1 : 0;
+        } else if (expr[pos] === "<") {
+          pos++;
+          const right = parseAddSub();
+          left = left < right ? 1 : 0;
+        } else if (expr[pos] === ">") {
+          pos++;
+          const right = parseAddSub();
+          left = left > right ? 1 : 0;
+        } else {
+          break;
+        }
+      }
+      return left;
+    };
+
+    const parseAnd = (): number => {
+      let left = parseComparison();
+      while (true) {
+        skipWhitespace();
+        if (expr.slice(pos, pos + 2) === "&&") {
+          pos += 2;
+          const right = parseComparison();
+          left = (left !== 0 && right !== 0) ? 1 : 0;
+        } else {
+          break;
+        }
+      }
+      return left;
+    };
+
+    const parseOr = (): number => {
+      let left = parseAnd();
+      while (true) {
+        skipWhitespace();
+        if (expr.slice(pos, pos + 2) === "||") {
+          pos += 2;
+          const right = parseAnd();
+          left = (left !== 0 || right !== 0) ? 1 : 0;
+        } else {
+          break;
+        }
+      }
+      return left;
+    };
+
+    return parseOr();
   }
 
   setCwd(cwd: string): void {

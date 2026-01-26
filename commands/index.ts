@@ -22,6 +22,7 @@ export { tree } from "./tree.ts";
 export { find } from "./find.ts";
 export { sed } from "./sed.ts";
 export { awk } from "./awk.ts";
+export { breakCmd, continueCmd } from "./break-continue.ts";
 
 // Re-export all commands as a bundle
 import { echo } from "./echo.ts";
@@ -46,6 +47,7 @@ import { tree } from "./tree.ts";
 import { find } from "./find.ts";
 import { sed } from "./sed.ts";
 import { awk } from "./awk.ts";
+import { breakCmd, continueCmd } from "./break-continue.ts";
 
 export const builtinCommands: Record<string, Command> = {
   echo,
@@ -72,4 +74,6 @@ export const builtinCommands: Record<string, Command> = {
   find,
   sed,
   awk,
+  break: breakCmd,
+  continue: continueCmd,
 };

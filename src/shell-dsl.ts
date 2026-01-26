@@ -140,7 +140,7 @@ export class ShellDSL {
 
   // Low-level API
   lex(source: string): Token[] {
-    return new Lexer(source).tokenize();
+    return new Lexer(source, { preserveNewlines: true }).tokenize();
   }
 
   parse(tokens: Token[]): ASTNode {
