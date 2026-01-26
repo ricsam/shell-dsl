@@ -52,9 +52,9 @@ export class ShellDSL {
     const shell = this;
 
     return new ShellPromise({
-      execute: async () => {
-        const cwd = options?.cwd ?? shell.currentCwd;
-        const env = { ...shell.currentEnv, ...options?.env };
+      execute: async (overrides) => {
+        const cwd = overrides?.cwd ?? options?.cwd ?? shell.currentCwd;
+        const env = { ...shell.currentEnv, ...options?.env, ...overrides?.env };
 
         const interpreter = new Interpreter({
           fs: shell.fs,

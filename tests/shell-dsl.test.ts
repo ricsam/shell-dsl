@@ -119,6 +119,46 @@ describe("ShellDSL Integration", () => {
     expect(result).toBe("one\ntwo\nthree\n");
   });
 
+  describe("Global throws setting", () => {
+    test("sh.throws(false) disables throwing globally", async () => {
+      sh.throws(false);
+      const result = await sh`false`;
+      expect(result.exitCode).toBe(1);
+      sh.throws(true); // restore default
+    });
+
+    test("sh.throws(false) affects all subsequent commands", async () => {
+      sh.throws(false);
+      const result1 = await sh`false`;
+      const result2 = await sh`cat /nonexistent`;
+      expect(result1.exitCode).toBe(1);
+      expect(result2.exitCode).not.toBe(0);
+      sh.throws(true); // restore default
+    });
+
+    test("per-command .throws(true) overrides global throws(false)", async () => {
+      sh.throws(false);
+      try {
+        await sh`false`.throws(true);
+        expect(true).toBe(false); // should not reach
+      } catch (err) {
+        expect(err).toBeInstanceOf(ShellError);
+      }
+      sh.throws(true); // restore default
+    });
+
+    test("sh.throws(true) restores throwing behavior", async () => {
+      sh.throws(false);
+      sh.throws(true);
+      try {
+        await sh`false`;
+        expect(true).toBe(false); // should not reach
+      } catch (err) {
+        expect(err).toBeInstanceOf(ShellError);
+      }
+    });
+  });
+
   test("escape utility", () => {
     expect(sh.escape("hello world")).toBe("'hello world'");
     expect(sh.escape("safe")).toBe("safe");

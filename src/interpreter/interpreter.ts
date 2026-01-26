@@ -85,10 +85,10 @@ export class Interpreter {
       return 0;
     }
 
-    // Evaluate arguments
+    // Evaluate arguments using localEnv for scoped variable expansion
     const args: string[] = [];
     for (const arg of node.args) {
-      const evaluated = await this.evaluateNode(arg);
+      const evaluated = await this.evaluateNode(arg, localEnv);
       // Glob expansion returns multiple values
       if (arg.type === "glob") {
         const matches = await this.fs.glob(evaluated, { cwd: this.cwd });
@@ -358,16 +358,17 @@ export class Interpreter {
     return this.executeNode(right, stdinSource, stdout, stderr);
   }
 
-  private async evaluateNode(node: ASTNode): Promise<string> {
+  private async evaluateNode(node: ASTNode, localEnv?: Record<string, string>): Promise<string> {
+    const env = localEnv ?? this.env;
     switch (node.type) {
       case "literal":
         return node.value;
       case "variable":
-        return this.env[node.name] ?? "";
+        return env[node.name] ?? "";
       case "glob":
         return node.pattern;
       case "concat": {
-        const parts = await Promise.all(node.parts.map((p) => this.evaluateNode(p)));
+        const parts = await Promise.all(node.parts.map((p) => this.evaluateNode(p, localEnv)));
         return parts.join("");
       }
       case "substitution": {

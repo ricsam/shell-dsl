@@ -1,8 +1,13 @@
 import type { ExecResult } from "./types.ts";
 import { ShellError } from "./errors.ts";
 
+export interface ExecuteOverrides {
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
 export interface ShellPromiseOptions {
-  execute: () => Promise<ExecResult>;
+  execute: (overrides: ExecuteOverrides) => Promise<ExecResult>;
   cwdOverride?: string;
   envOverride?: Record<string, string>;
   shouldThrow?: boolean;
@@ -10,7 +15,7 @@ export interface ShellPromiseOptions {
 }
 
 export class ShellPromise implements PromiseLike<ExecResult> {
-  private executor: () => Promise<ExecResult>;
+  private executor: (overrides: ExecuteOverrides) => Promise<ExecResult>;
   private cwdOverride?: string;
   private envOverride?: Record<string, string>;
   private shouldThrow: boolean;
@@ -27,7 +32,10 @@ export class ShellPromise implements PromiseLike<ExecResult> {
 
   private async run(): Promise<ExecResult> {
     if (!this.cachedResult) {
-      this.cachedResult = this.executor();
+      this.cachedResult = this.executor({
+        cwd: this.cwdOverride,
+        env: this.envOverride,
+      });
     }
 
     const result = await this.cachedResult;

@@ -62,6 +62,46 @@ describe("Redirections", () => {
       const errors = vol.readFileSync("/errors.txt", "utf8");
       expect(errors).toContain("nonexistent");
     });
+
+    test("appends stderr to file (2>>)", async () => {
+      vol.writeFileSync("/errors.txt", "previous error\n");
+      await sh`cat /nonexistent 2>> /errors.txt`.nothrow();
+      const errors = vol.readFileSync("/errors.txt", "utf8");
+      expect(errors).toContain("previous error");
+      expect(errors).toContain("nonexistent");
+    });
+  });
+
+  describe("File descriptor redirects", () => {
+    test("2>&1 redirects stderr to stdout", async () => {
+      const result = await sh`cat /nonexistent 2>&1`.nothrow();
+      expect(result.stdout.toString()).toContain("nonexistent");
+      expect(result.stderr.toString()).toBe("");
+    });
+
+    test("1>&2 redirects stdout to stderr", async () => {
+      const result = await sh`echo "test message" 1>&2`;
+      expect(result.stderr.toString()).toBe("test message\n");
+      expect(result.stdout.toString()).toBe("");
+    });
+
+    test("&> redirects both stdout and stderr to file", async () => {
+      vol.writeFileSync("/data.txt", "some content");
+      await sh`cat /data.txt /nonexistent &> /output.txt`.nothrow();
+      const output = vol.readFileSync("/output.txt", "utf8");
+      expect(output).toContain("some content");
+      expect(output).toContain("nonexistent");
+    });
+
+    test("&>> appends both stdout and stderr to file", async () => {
+      vol.writeFileSync("/output.txt", "previous output\n");
+      vol.writeFileSync("/data.txt", "new content");
+      await sh`cat /data.txt /nonexistent &>> /output.txt`.nothrow();
+      const output = vol.readFileSync("/output.txt", "utf8");
+      expect(output).toContain("previous output");
+      expect(output).toContain("new content");
+      expect(output).toContain("nonexistent");
+    });
   });
 
   describe("Combined redirects", () => {

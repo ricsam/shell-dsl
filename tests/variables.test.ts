@@ -71,6 +71,38 @@ describe("Variables", () => {
     });
   });
 
+  describe("Scoped variable assignment", () => {
+    test("FOO=bar echo $FOO expands variable for that command", async () => {
+      const result = await sh`FOO=bar echo $FOO`.text();
+      expect(result).toBe("bar\n");
+    });
+
+    test("scoped variable does not persist after command", async () => {
+      await sh`TEMP=scoped echo $TEMP`.text();
+      const result = await sh`echo $TEMP`.text();
+      expect(result).toBe("\n");
+    });
+
+    test("scoped variable overrides global variable for command", async () => {
+      sh.env({ MYVAR: "global" });
+      const result = await sh`MYVAR=scoped echo $MYVAR`.text();
+      expect(result).toBe("scoped\n");
+      // Global should still be intact
+      const globalResult = await sh`echo $MYVAR`.text();
+      expect(globalResult).toBe("global\n");
+    });
+
+    test("multiple scoped variables in one command", async () => {
+      const result = await sh`A=first B=second echo $A $B`.text();
+      expect(result).toBe("first second\n");
+    });
+
+    test("scoped variable with command substitution", async () => {
+      const result = await sh`MSG=hello echo "message: $MSG"`.text();
+      expect(result).toBe("message: hello\n");
+    });
+  });
+
   describe("Global env changes", () => {
     test("sh.env() adds variables", async () => {
       sh.env({ CUSTOM: "value" });

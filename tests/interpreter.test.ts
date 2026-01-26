@@ -113,4 +113,43 @@ describe("Interpreter", () => {
     const notEqualResult = await run('test "foo" != "bar" && echo different');
     expect(notEqualResult.stdout.toString()).toBe("different\n");
   });
+
+  describe("Double quote variable expansion", () => {
+    test("expands $VAR in double quotes", async () => {
+      const result = await run('echo "User: $USER"');
+      expect(result.stdout.toString()).toBe("User: testuser\n");
+    });
+
+    test("expands ${VAR} in double quotes", async () => {
+      const result = await run('echo "Path: ${HOME}/subdir"');
+      expect(result.stdout.toString()).toBe("Path: /home/testuser/subdir\n");
+    });
+
+    test("expands multiple variables in double quotes", async () => {
+      const result = await run('echo "User $USER lives at $HOME"');
+      expect(result.stdout.toString()).toBe("User testuser lives at /home/testuser\n");
+    });
+
+    test("preserves spaces in double quotes", async () => {
+      const result = await run('echo "Hello   World"');
+      expect(result.stdout.toString()).toBe("Hello   World\n");
+    });
+
+    test("double quotes disable glob expansion", async () => {
+      vol.fromJSON({ "/test.txt": "content" });
+      const result = await run('echo "*.txt"');
+      expect(result.stdout.toString()).toBe("*.txt\n");
+    });
+
+    test("separate quoted and unquoted parts become separate args", async () => {
+      // In this DSL, adjacent quoted strings become separate arguments
+      const result = await run('echo "prefix-" $USER "-suffix"');
+      expect(result.stdout.toString()).toBe("prefix- testuser -suffix\n");
+    });
+
+    test("expands variable with path concatenation", async () => {
+      const result = await run('echo "$HOME/bin:$HOME/lib"');
+      expect(result.stdout.toString()).toBe("/home/testuser/bin:/home/testuser/lib\n");
+    });
+  });
 });

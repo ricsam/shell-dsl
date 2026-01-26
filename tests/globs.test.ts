@@ -53,4 +53,41 @@ describe("Glob Expansion", () => {
     const result = await sh`echo {a,b}.txt`.text();
     expect(result.trim().split(/\s+/).sort()).toEqual(["/files/a.txt", "/files/b.txt"]);
   });
+
+  describe("Recursive glob patterns", () => {
+    test("** matches files in subdirectories", async () => {
+      const result = await sh`echo **/*.txt`.text();
+      const files = result.trim().split(/\s+/).sort();
+      // Should include files in current dir and subdirectories
+      expect(files).toContain("/files/a.txt");
+      expect(files).toContain("/files/b.txt");
+      expect(files).toContain("/files/sub/e.txt");
+      expect(files).toContain("/files/sub/f.txt");
+    });
+
+    test("**/file.txt matches specific filename recursively", async () => {
+      vol.mkdirSync("/files/sub/deep", { recursive: true });
+      vol.writeFileSync("/files/sub/deep/target.txt", "deep");
+      const result = await sh`echo **/target.txt`.text();
+      expect(result.trim()).toContain("/files/sub/deep/target.txt");
+    });
+
+    test("**/*.md matches only .md files recursively", async () => {
+      vol.writeFileSync("/files/sub/nested.md", "nested md");
+      const result = await sh`echo **/*.md`.text();
+      const files = result.trim().split(/\s+/).sort();
+      expect(files).toContain("/files/c.md");
+      expect(files).toContain("/files/d.md");
+      expect(files).toContain("/files/sub/nested.md");
+      // Should not contain .txt files
+      expect(files.filter((f) => f.endsWith(".txt"))).toEqual([]);
+    });
+
+    test("** with multiple directory levels", async () => {
+      vol.mkdirSync("/files/a/b/c", { recursive: true });
+      vol.writeFileSync("/files/a/b/c/deep.txt", "very deep");
+      const result = await sh`echo **/deep.txt`.text();
+      expect(result.trim()).toContain("/files/a/b/c/deep.txt");
+    });
+  });
 });
