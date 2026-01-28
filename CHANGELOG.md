@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.11
+
+### Patch Changes
+
+- /dev/null support and grep improvements
+
 ## 0.0.10
 
 ### Patch Changes

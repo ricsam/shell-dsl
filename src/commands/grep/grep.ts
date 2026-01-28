@@ -20,6 +20,8 @@ interface GrepOptions {
   beforeContext: number;       // -B
   afterContext: number;        // -A
   recursive: boolean;          // -r/-R
+  include: string[];           // --include
+  exclude: string[];           // --exclude
 }
 
 const spec = {
@@ -46,6 +48,8 @@ const spec = {
     { short: "A", long: "after-context", takesValue: true },
     { short: "B", long: "before-context", takesValue: true },
     { short: "C", long: "context", takesValue: true },
+    { long: "include", takesValue: true },
+    { long: "exclude", takesValue: true },
   ] as FlagDefinition[],
   usage: "grep [-ivnclLqHhEFwxorR] [-e pattern] [-m num] pattern [file ...]",
 };
@@ -70,6 +74,8 @@ function createDefaults(): GrepOptions {
     beforeContext: 0,
     afterContext: 0,
     recursive: false,
+    include: [],
+    exclude: [],
   };
 }
 
@@ -102,8 +108,26 @@ const handler = (flags: GrepOptions, flag: FlagDefinition, value?: string) => {
         flags.afterContext = num;
       }
       break;
+    default:
+      // Handle long-only flags
+      if (flag.long === "include" && value) flags.include.push(value);
+      else if (flag.long === "exclude" && value) flags.exclude.push(value);
+      break;
   }
 };
+
+function matchGlob(str: string, pattern: string): boolean {
+  // Convert shell glob to regex: * -> .*, ? -> ., rest escaped
+  let re = "^";
+  for (const ch of pattern) {
+    if (ch === "*") re += ".*";
+    else if (ch === "?") re += ".";
+    else if (/[.+^${}()|[\]\\]/.test(ch)) re += "\\" + ch;
+    else re += ch;
+  }
+  re += "$";
+  return new RegExp(re).test(str);
+}
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -204,6 +228,22 @@ export const grep: Command = async (ctx) => {
         expandedFiles.push(path); // Will error later
       }
     }
+    // Filter by include/exclude patterns
+    if (options.include.length > 0 || options.exclude.length > 0) {
+      expandedFiles = expandedFiles.filter((f) => {
+        const basename = ctx.fs.basename(f);
+        if (options.include.length > 0) {
+          const included = options.include.some((pat) => matchGlob(basename, pat));
+          if (!included) return false;
+        }
+        if (options.exclude.length > 0) {
+          const excluded = options.exclude.some((pat) => matchGlob(basename, pat));
+          if (excluded) return false;
+        }
+        return true;
+      });
+    }
+
     // Default to showing filenames for recursive
     if (showFilenames === null) {
       showFilenames = true;

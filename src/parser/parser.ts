@@ -382,11 +382,11 @@ export class Parser {
       }
     }
 
-    if (args.length === 0 && assignments.length === 0) {
+    if (args.length === 0 && assignments.length === 0 && redirects.length === 0) {
       throw new ParseError("Expected command");
     }
 
-    const name = args.shift() ?? { type: "literal" as const, value: "" };
+    const name = args.shift() ?? { type: "literal" as const, value: redirects.length > 0 ? ":" : "" };
 
     return {
       type: "command",

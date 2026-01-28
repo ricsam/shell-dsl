@@ -244,6 +244,14 @@ export class Interpreter {
             stderr,
           };
         }
+        // /dev/null: empty input
+        if (target === "/dev/null") {
+          return {
+            stdin: (async function* () {})(),
+            stdout,
+            stderr,
+          };
+        }
         // Input redirect from file
         const path = this.fs.resolve(this.cwd, target);
         const content = await this.fs.readFile(path);
@@ -257,8 +265,11 @@ export class Interpreter {
       }
       case ">": {
         // Output redirect (overwrite)
-        const path = this.fs.resolve(this.cwd, target);
         const collector = createStdout();
+        if (target === "/dev/null") {
+          return { stdin, stdout: collector, stderr };
+        }
+        const path = this.fs.resolve(this.cwd, target);
         const fileWritePromise = (async () => {
           const data = await collector.collect();
           await this.fs.writeFile(path, data);
@@ -267,8 +278,11 @@ export class Interpreter {
       }
       case ">>": {
         // Output redirect (append)
-        const path = this.fs.resolve(this.cwd, target);
         const collector = createStdout();
+        if (target === "/dev/null") {
+          return { stdin, stdout: collector, stderr };
+        }
+        const path = this.fs.resolve(this.cwd, target);
         const fileWritePromise = (async () => {
           const data = await collector.collect();
           await this.fs.appendFile(path, data);
@@ -277,8 +291,11 @@ export class Interpreter {
       }
       case "2>": {
         // Stderr redirect (overwrite)
-        const path = this.fs.resolve(this.cwd, target);
         const collector = createStderr();
+        if (target === "/dev/null") {
+          return { stdin, stdout, stderr: collector };
+        }
+        const path = this.fs.resolve(this.cwd, target);
         const fileWritePromise = (async () => {
           const data = await collector.collect();
           await this.fs.writeFile(path, data);
@@ -287,8 +304,11 @@ export class Interpreter {
       }
       case "2>>": {
         // Stderr redirect (append)
-        const path = this.fs.resolve(this.cwd, target);
         const collector = createStderr();
+        if (target === "/dev/null") {
+          return { stdin, stdout, stderr: collector };
+        }
+        const path = this.fs.resolve(this.cwd, target);
         const fileWritePromise = (async () => {
           const data = await collector.collect();
           await this.fs.appendFile(path, data);
@@ -297,8 +317,11 @@ export class Interpreter {
       }
       case "&>": {
         // Both to file (overwrite)
-        const path = this.fs.resolve(this.cwd, target);
         const collector = createStdout();
+        if (target === "/dev/null") {
+          return { stdin, stdout: collector, stderr: collector };
+        }
+        const path = this.fs.resolve(this.cwd, target);
         const fileWritePromise = (async () => {
           const data = await collector.collect();
           await this.fs.writeFile(path, data);
@@ -307,8 +330,11 @@ export class Interpreter {
       }
       case "&>>": {
         // Both to file (append)
-        const path = this.fs.resolve(this.cwd, target);
         const collector = createStdout();
+        if (target === "/dev/null") {
+          return { stdin, stdout: collector, stderr: collector };
+        }
+        const path = this.fs.resolve(this.cwd, target);
         const fileWritePromise = (async () => {
           const data = await collector.collect();
           await this.fs.appendFile(path, data);

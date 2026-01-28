@@ -7,6 +7,7 @@ export function createVirtualFS(memfs: IFs): VirtualFS {
 
   return {
     async readFile(path: string): Promise<Buffer> {
+      if (path === "/dev/null") return Buffer.alloc(0);
       const content = await fs.readFile(path);
       return Buffer.from(content);
     },
