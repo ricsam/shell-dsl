@@ -198,6 +198,82 @@ describe("sed command", () => {
   });
 
   // ============================================================
+  // In-place editing (-i)
+  // ============================================================
+
+  describe("In-place editing (-i)", () => {
+    test("sed -i modifies file in place", async () => {
+      const result = await sh`sed -i 's/foo/bar/g' /data.txt`.nothrow();
+      expect(result.exitCode).toBe(0);
+      const content = vol.readFileSync("/data.txt", "utf8") as string;
+      expect(content).toContain("bar bar");
+      expect(content).not.toContain("foo");
+    });
+
+    test("sed -i does not output to stdout", async () => {
+      const result = await sh`sed -i 's/foo/bar/g' /data.txt`.text();
+      expect(result).toBe("");
+    });
+  });
+
+  // ============================================================
+  // Backreference capture groups
+  // ============================================================
+
+  describe("Backreference capture groups", () => {
+    test("sed \\(\\) capture groups and \\1 replacement", async () => {
+      const result = await sh`echo "foobar" | sed 's/\\(foo\\)/[\\1]/'`.text();
+      expect(result).toBe("[foo]bar\n");
+    });
+
+    test("multiple capture groups \\1 \\2", async () => {
+      const result = await sh`echo "hello world" | sed 's/\\(hello\\) \\(world\\)/\\2 \\1/'`.text();
+      expect(result).toBe("world hello\n");
+    });
+  });
+
+  // ============================================================
+  // Semicolon-separated commands
+  // ============================================================
+
+  describe("Semicolon-separated commands", () => {
+    test("multiple s/// commands separated by ;", async () => {
+      const result = await sh`echo "foo bar" | sed 's/foo/baz/; s/bar/qux/'`.text();
+      expect(result).toBe("baz qux\n");
+    });
+
+    test("three commands separated by ;", async () => {
+      const result = await sh`echo "a b c" | sed 's/a/A/; s/b/B/; s/c/C/'`.text();
+      expect(result).toBe("A B C\n");
+    });
+  });
+
+  // ============================================================
+  // Real-world SQL use cases
+  // ============================================================
+
+  describe("SQL use cases", () => {
+    test("sed -i adds IF NOT EXISTS to CREATE TABLE", async () => {
+      vol.writeFileSync("/schema.sql", 'CREATE TABLE "users" (\n  id INTEGER\n);\n');
+      await sh`sed -i 's/CREATE TABLE "/CREATE TABLE IF NOT EXISTS "/g' /schema.sql`;
+      const content = vol.readFileSync("/schema.sql", "utf8") as string;
+      expect(content).toContain('CREATE TABLE IF NOT EXISTS "users"');
+    });
+
+    test("sed -i with backreferences and semicolon-separated commands on SQL", async () => {
+      vol.writeFileSync(
+        "/fk.sql",
+        'ALTER TABLE "orders" ADD CONSTRAINT "fk_user" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE;\n'
+      );
+      const replaceCmd = 's/ALTER TABLE "\\(.*\\)" ADD CONSTRAINT "\\(.*\\)" FOREIGN KEY/DO $$ BEGIN ALTER TABLE "\\1" ADD CONSTRAINT "\\2" FOREIGN KEY/g; s/ON DELETE \\(.*\\);/ON DELETE \\1; EXCEPTION WHEN duplicate_object THEN NULL; END $$;/g';
+      await sh`sed -i ${replaceCmd} /fk.sql`;
+      const content = vol.readFileSync("/fk.sql", "utf8") as string;
+      expect(content).toContain("DO $$ BEGIN ALTER TABLE");
+      expect(content).toContain("EXCEPTION WHEN duplicate_object THEN NULL; END $$;");
+    });
+  });
+
+  // ============================================================
   // Edge Cases
   // ============================================================
 

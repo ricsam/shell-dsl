@@ -11,6 +11,7 @@ interface SedCommand {
 
 interface SedOptions {
   suppressOutput: boolean; // -n
+  inPlace: boolean; // -i
   commands: SedCommand[];
 }
 
@@ -20,16 +21,27 @@ function parseSubstitution(script: string): SedCommand | null {
   const match = script.match(/^s(.)(.+?)\1(.*?)\1([gi]*)$/);
   if (!match) return null;
 
-  const [, , patternStr, replacement, flags] = match;
+  const [, , rawPattern, rawReplacement, flags] = match;
   const globalFlag = flags!.includes("g");
   const caseInsensitive = flags!.includes("i");
+
+  // Convert sed-style \( \) to JS ( ) for capture groups
+  const patternStr = rawPattern!.replace(/\\\(/g, "(").replace(/\\\)/g, ")");
+  // Convert sed replacement to JS String.replace format:
+  // 1. Mark backreferences \1..\9 with placeholders
+  // 2. Escape $ so String.replace doesn't treat $$ as special
+  // 3. Restore backreference placeholders as $1..$9
+  const replacement = rawReplacement!
+    .replace(/\\([0-9])/g, "\x00BACKREF$1\x00")
+    .replace(/\$/g, "$$$$")
+    .replace(/\x00BACKREF([0-9])\x00/g, "$$$1");
 
   try {
     const regexFlags = caseInsensitive ? "i" : "";
     return {
       type: "s",
-      pattern: new RegExp(patternStr!, regexFlags),
-      replacement: replacement!,
+      pattern: new RegExp(patternStr, regexFlags),
+      replacement,
       globalFlag,
       printFlag: false,
     };
@@ -92,9 +104,48 @@ function parseCommand(script: string): SedCommand | null {
   return null;
 }
 
+function splitScriptParts(script: string): string[] {
+  // Split on ';' that are outside of s/// delimiters
+  const parts: string[] = [];
+  let i = 0;
+  let current = "";
+  while (i < script.length) {
+    if (script[i] === "s" && i + 1 < script.length) {
+      // Detect substitution command — consume s/pattern/replacement/flags
+      const delim = script[i + 1]!;
+      let j = i + 2;
+      let delimCount = 0;
+      while (j < script.length && delimCount < 2) {
+        if (script[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (script[j] === delim) delimCount++;
+        j++;
+      }
+      // Consume trailing flags
+      while (j < script.length && /[gi]/.test(script[j]!)) j++;
+      current += script.slice(i, j);
+      i = j;
+    } else if (script[i] === ";") {
+      const trimmed = current.trim();
+      if (trimmed) parts.push(trimmed);
+      current = "";
+      i++;
+    } else {
+      current += script[i];
+      i++;
+    }
+  }
+  const trimmed = current.trim();
+  if (trimmed) parts.push(trimmed);
+  return parts;
+}
+
 function parseArgs(args: string[]): { options: SedOptions; files: string[] } {
   const options: SedOptions = {
     suppressOutput: false,
+    inPlace: false,
     commands: [],
   };
   const files: string[] = [];
@@ -105,6 +156,12 @@ function parseArgs(args: string[]): { options: SedOptions; files: string[] } {
 
     if (arg === "-n") {
       options.suppressOutput = true;
+      i++;
+      continue;
+    }
+
+    if (arg === "-i") {
+      options.inPlace = true;
       i++;
       continue;
     }
@@ -121,10 +178,13 @@ function parseArgs(args: string[]): { options: SedOptions; files: string[] } {
     // Non-flag argument: either a script or a file
     if (!arg.startsWith("-")) {
       if (options.commands.length === 0) {
-        // First non-flag is the script
-        const cmd = parseCommand(arg);
-        if (cmd) {
-          options.commands.push(cmd);
+        // First non-flag is the script — may contain ;-separated commands
+        const parts = splitScriptParts(arg);
+        for (const part of parts) {
+          const cmd = parseCommand(part);
+          if (cmd) {
+            options.commands.push(cmd);
+          }
         }
       } else {
         // Subsequent non-flags are files
@@ -218,6 +278,31 @@ export const sed: Command = async (ctx) => {
     // Read from stdin
     const content = await ctx.stdin.text();
     await processContent(content);
+  } else if (options.inPlace) {
+    // In-place editing: write results back to each file
+    for (const file of files) {
+      try {
+        const path = ctx.fs.resolve(ctx.cwd, file);
+        const content = await ctx.fs.readFile(path);
+        const lines = content.toString().split("\n");
+        if (lines.length > 0 && lines[lines.length - 1] === "") {
+          lines.pop();
+        }
+        const outputLines: string[] = [];
+        for (const line of lines) {
+          const { output } = processLine(line, options.commands, options.suppressOutput);
+          if (output !== null) {
+            outputLines.push(output);
+          }
+        }
+        const result = outputLines.length > 0 ? outputLines.join("\n") + "\n" : "";
+        await ctx.fs.writeFile(path, result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await ctx.stderr.writeText(`sed: ${file}: ${message}\n`);
+        return 1;
+      }
+    }
   } else {
     // Read from files
     for (const file of files) {
