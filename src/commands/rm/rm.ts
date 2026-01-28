@@ -1,27 +1,40 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface RmFlags {
+  recursive: boolean;
+  force: boolean;
+}
+
+const spec = {
+  name: "rm",
+  flags: [
+    { short: "r", long: "recursive" },
+    { short: "R" },
+    { short: "f", long: "force" },
+  ] as FlagDefinition[],
+  usage: "rm [-rf] file ...",
+};
+
+const defaults: RmFlags = { recursive: false, force: false };
+
+const handler = (flags: RmFlags, flag: FlagDefinition) => {
+  if (flag.short === "r" || flag.short === "R") flags.recursive = true;
+  if (flag.short === "f") flags.force = true;
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const rm: Command = async (ctx) => {
-  let recursive = false;
-  let force = false;
-  const targets: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  for (const arg of ctx.args) {
-    if (arg === "-r" || arg === "-R" || arg === "--recursive") {
-      recursive = true;
-    } else if (arg === "-f" || arg === "--force") {
-      force = true;
-    } else if (arg === "-rf" || arg === "-fr") {
-      recursive = true;
-      force = true;
-    } else if (arg.startsWith("-")) {
-      for (const flag of arg.slice(1)) {
-        if (flag === "r" || flag === "R") recursive = true;
-        else if (flag === "f") force = true;
-      }
-    } else {
-      targets.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
+
+  const { recursive, force } = result.flags;
+  const targets = result.args;
 
   if (targets.length === 0) {
     if (!force) {

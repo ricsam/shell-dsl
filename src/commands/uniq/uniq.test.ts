@@ -94,4 +94,18 @@ describe("uniq command", () => {
     const result = await sh`uniq -d /single.txt`.text();
     expect(result).toBe("");
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`uniq -x /consecutive.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`uniq --invalid /consecutive.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

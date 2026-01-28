@@ -142,7 +142,13 @@ function splitScriptParts(script: string): string[] {
   return parts;
 }
 
-function parseArgs(args: string[]): { options: SedOptions; files: string[] } {
+interface ParseArgsResult {
+  options: SedOptions;
+  files: string[];
+  error?: { type: "unrecognized_option" | "missing_value"; option: string };
+}
+
+function parseArgs(args: string[]): ParseArgsResult {
   const options: SedOptions = {
     suppressOutput: false,
     inPlace: false,
@@ -154,47 +160,108 @@ function parseArgs(args: string[]): { options: SedOptions; files: string[] } {
   while (i < args.length) {
     const arg = args[i]!;
 
-    if (arg === "-n") {
-      options.suppressOutput = true;
+    // Handle -- to stop flag parsing
+    if (arg === "--") {
       i++;
-      continue;
-    }
-
-    if (arg === "-i") {
-      options.inPlace = true;
-      i++;
-      continue;
-    }
-
-    if (arg === "-e" && args[i + 1] !== undefined) {
-      const cmd = parseCommand(args[i + 1]!);
-      if (cmd) {
-        options.commands.push(cmd);
+      // Rest are files or script
+      while (i < args.length) {
+        const remaining = args[i]!;
+        if (options.commands.length === 0) {
+          const parts = splitScriptParts(remaining);
+          for (const part of parts) {
+            const cmd = parseCommand(part);
+            if (cmd) options.commands.push(cmd);
+          }
+        } else {
+          files.push(remaining);
+        }
+        i++;
       }
-      i += 2;
+      break;
+    }
+
+    // Long flag handling
+    if (arg.startsWith("--")) {
+      return {
+        options,
+        files,
+        error: { type: "unrecognized_option", option: arg },
+      };
+    }
+
+    // Short flag handling
+    if (arg.startsWith("-") && arg.length > 1) {
+      const flagChars = arg.slice(1);
+
+      for (let j = 0; j < flagChars.length; j++) {
+        const char = flagChars[j]!;
+
+        if (char === "n") {
+          options.suppressOutput = true;
+        } else if (char === "i") {
+          options.inPlace = true;
+        } else if (char === "e") {
+          // -e takes a script argument
+          const restOfArg = flagChars.slice(j + 1);
+          let script: string;
+
+          if (restOfArg.length > 0) {
+            script = restOfArg;
+          } else if (i + 1 < args.length) {
+            script = args[++i]!;
+          } else {
+            return {
+              options,
+              files,
+              error: { type: "missing_value", option: "-e" },
+            };
+          }
+
+          const cmd = parseCommand(script);
+          if (cmd) options.commands.push(cmd);
+          break; // -e consumes rest of this arg
+        } else {
+          return {
+            options,
+            files,
+            error: { type: "unrecognized_option", option: `-${char}` },
+          };
+        }
+      }
+      i++;
       continue;
     }
 
     // Non-flag argument: either a script or a file
-    if (!arg.startsWith("-")) {
-      if (options.commands.length === 0) {
-        // First non-flag is the script — may contain ;-separated commands
-        const parts = splitScriptParts(arg);
-        for (const part of parts) {
-          const cmd = parseCommand(part);
-          if (cmd) {
-            options.commands.push(cmd);
-          }
-        }
-      } else {
-        // Subsequent non-flags are files
-        files.push(arg);
+    if (options.commands.length === 0) {
+      // First non-flag is the script — may contain ;-separated commands
+      const parts = splitScriptParts(arg);
+      for (const part of parts) {
+        const cmd = parseCommand(part);
+        if (cmd) options.commands.push(cmd);
       }
+    } else {
+      // Subsequent non-flags are files
+      files.push(arg);
     }
     i++;
   }
 
   return { options, files };
+}
+
+function formatError(error: NonNullable<ParseArgsResult["error"]>): string {
+  let message: string;
+  if (error.type === "unrecognized_option") {
+    if (error.option.startsWith("--")) {
+      message = `sed: unrecognized option '${error.option}'\n`;
+    } else {
+      message = `sed: invalid option -- '${error.option.slice(1)}'\n`;
+    }
+  } else {
+    message = `sed: option '${error.option}' requires an argument\n`;
+  }
+  return message + `usage: sed [-ni] [-e script] script [file ...]\n`;
 }
 
 function applySubstitution(line: string, cmd: SedCommand): string {
@@ -252,7 +319,12 @@ function processLine(
 }
 
 export const sed: Command = async (ctx) => {
-  const { options, files } = parseArgs(ctx.args);
+  const { options, files, error } = parseArgs(ctx.args);
+
+  if (error) {
+    await ctx.stderr.writeText(formatError(error));
+    return 1;
+  }
 
   if (options.commands.length === 0) {
     await ctx.stderr.writeText("sed: missing script\n");

@@ -497,4 +497,20 @@ describe("grep command", () => {
       expect(result).toBe("\n\n");
     });
   });
+
+  describe("Invalid Flags", () => {
+    test("invalid short flag returns error with usage", async () => {
+      const result = await sh`grep -z foo /data.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid option");
+      expect(result.stderr.toString()).toContain("usage:");
+    });
+
+    test("invalid long flag returns error with usage", async () => {
+      const result = await sh`grep --blabla foo /data.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("unrecognized option");
+      expect(result.stderr.toString()).toContain("usage:");
+    });
+  });
 });

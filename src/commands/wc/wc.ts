@@ -1,30 +1,43 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface WcFlags {
+  lines: boolean;
+  words: boolean;
+  chars: boolean;
+}
+
+const spec = {
+  name: "wc",
+  flags: [
+    { short: "l", long: "lines" },
+    { short: "w", long: "words" },
+    { short: "c", long: "bytes" },
+    { short: "m", long: "chars" },
+  ] as FlagDefinition[],
+  usage: "wc [-lwcm] [file ...]",
+};
+
+const defaults: WcFlags = { lines: false, words: false, chars: false };
+
+const handler = (flags: WcFlags, flag: FlagDefinition) => {
+  if (flag.short === "l") flags.lines = true;
+  if (flag.short === "w") flags.words = true;
+  if (flag.short === "c" || flag.short === "m") flags.chars = true;
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const wc: Command = async (ctx) => {
-  let showLines = false;
-  let showWords = false;
-  let showChars = false;
-  const files: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  // Parse arguments
-  for (const arg of ctx.args) {
-    if (arg === "-l") {
-      showLines = true;
-    } else if (arg === "-w") {
-      showWords = true;
-    } else if (arg === "-c" || arg === "-m") {
-      showChars = true;
-    } else if (arg.startsWith("-")) {
-      // Handle combined flags
-      for (const flag of arg.slice(1)) {
-        if (flag === "l") showLines = true;
-        else if (flag === "w") showWords = true;
-        else if (flag === "c" || flag === "m") showChars = true;
-      }
-    } else {
-      files.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
+
+  let { lines: showLines, words: showWords, chars: showChars } = result.flags;
+  const files = result.args;
 
   // Default: show all
   if (!showLines && !showWords && !showChars) {

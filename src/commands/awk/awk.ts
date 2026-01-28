@@ -10,6 +10,12 @@ interface AwkOptions {
   program: AwkRule[];
 }
 
+interface ParseArgsResult {
+  options: AwkOptions;
+  files: string[];
+  error?: { type: "unrecognized_option" | "missing_value"; option: string };
+}
+
 function parseProgram(programStr: string): AwkRule[] {
   const rules: AwkRule[] = [];
   const trimmed = programStr.trim();
@@ -67,7 +73,11 @@ function parseProgram(programStr: string): AwkRule[] {
   return rules;
 }
 
-function parseArgs(args: string[]): { options: AwkOptions; files: string[] } {
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseArgs(args: string[]): ParseArgsResult {
   const options: AwkOptions = {
     fieldSeparator: /[ \t]+/,
     program: [],
@@ -80,47 +90,81 @@ function parseArgs(args: string[]): { options: AwkOptions; files: string[] } {
   while (i < args.length) {
     const arg = args[i]!;
 
-    if (arg === "-F" && args[i + 1] !== undefined) {
-      const fs = args[i + 1]!;
-      // For single character separators, match exactly
-      // For patterns, use as regex
-      if (fs.length === 1) {
-        options.fieldSeparator = new RegExp(escapeRegex(fs));
-      } else {
-        try {
-          options.fieldSeparator = new RegExp(fs);
-        } catch {
-          options.fieldSeparator = new RegExp(escapeRegex(fs));
+    // Handle -- to stop flag parsing
+    if (arg === "--") {
+      i++;
+      while (i < args.length) {
+        const remaining = args[i]!;
+        if (!programFound) {
+          options.program = parseProgram(remaining);
+          programFound = true;
+        } else {
+          files.push(remaining);
         }
+        i++;
       }
-      i += 2;
-      continue;
+      break;
     }
 
-    // -Ffs format (no space)
-    if (arg.startsWith("-F") && arg.length > 2) {
-      const fs = arg.slice(2);
-      if (fs.length === 1) {
-        options.fieldSeparator = new RegExp(escapeRegex(fs));
-      } else {
-        try {
-          options.fieldSeparator = new RegExp(fs);
-        } catch {
-          options.fieldSeparator = new RegExp(escapeRegex(fs));
+    // Long flag handling
+    if (arg.startsWith("--")) {
+      return {
+        options,
+        files,
+        error: { type: "unrecognized_option", option: arg },
+      };
+    }
+
+    // Short flag handling
+    if (arg.startsWith("-") && arg.length > 1) {
+      const char = arg[1]!;
+
+      if (char === "F") {
+        // -F takes a field separator argument
+        const restOfArg = arg.slice(2);
+        let fs: string;
+
+        if (restOfArg.length > 0) {
+          fs = restOfArg;
+        } else if (i + 1 < args.length) {
+          fs = args[++i]!;
+        } else {
+          return {
+            options,
+            files,
+            error: { type: "missing_value", option: "-F" },
+          };
         }
+
+        // For single character separators, match exactly
+        // For patterns, use as regex
+        if (fs.length === 1) {
+          options.fieldSeparator = new RegExp(escapeRegex(fs));
+        } else {
+          try {
+            options.fieldSeparator = new RegExp(fs);
+          } catch {
+            options.fieldSeparator = new RegExp(escapeRegex(fs));
+          }
+        }
+        i++;
+        continue;
+      } else {
+        // Unknown flag
+        return {
+          options,
+          files,
+          error: { type: "unrecognized_option", option: `-${char}` },
+        };
       }
-      i++;
-      continue;
     }
 
     // Non-flag argument
-    if (!arg.startsWith("-")) {
-      if (!programFound) {
-        options.program = parseProgram(arg);
-        programFound = true;
-      } else {
-        files.push(arg);
-      }
+    if (!programFound) {
+      options.program = parseProgram(arg);
+      programFound = true;
+    } else {
+      files.push(arg);
     }
     i++;
   }
@@ -128,8 +172,18 @@ function parseArgs(args: string[]): { options: AwkOptions; files: string[] } {
   return { options, files };
 }
 
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function formatError(error: NonNullable<ParseArgsResult["error"]>): string {
+  let message: string;
+  if (error.type === "unrecognized_option") {
+    if (error.option.startsWith("--")) {
+      message = `awk: unrecognized option '${error.option}'\n`;
+    } else {
+      message = `awk: invalid option -- '${error.option.slice(1)}'\n`;
+    }
+  } else {
+    message = `awk: option '${error.option}' requires an argument\n`;
+  }
+  return message + `usage: awk [-F fs] 'program' [file ...]\n`;
 }
 
 function splitFields(line: string, separator: RegExp): string[] {
@@ -300,7 +354,12 @@ function processLine(
 }
 
 export const awk: Command = async (ctx) => {
-  const { options, files } = parseArgs(ctx.args);
+  const { options, files, error } = parseArgs(ctx.args);
+
+  if (error) {
+    await ctx.stderr.writeText(formatError(error));
+    return 1;
+  }
 
   if (options.program.length === 0) {
     await ctx.stderr.writeText("awk: missing program\n");

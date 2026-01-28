@@ -1,29 +1,42 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface SortFlags {
+  reverse: boolean;
+  numeric: boolean;
+  unique: boolean;
+}
+
+const spec = {
+  name: "sort",
+  flags: [
+    { short: "r", long: "reverse" },
+    { short: "n", long: "numeric-sort" },
+    { short: "u", long: "unique" },
+  ] as FlagDefinition[],
+  usage: "sort [-rnu] [file ...]",
+};
+
+const defaults: SortFlags = { reverse: false, numeric: false, unique: false };
+
+const handler = (flags: SortFlags, flag: FlagDefinition) => {
+  if (flag.short === "r") flags.reverse = true;
+  if (flag.short === "n") flags.numeric = true;
+  if (flag.short === "u") flags.unique = true;
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const sort: Command = async (ctx) => {
-  let reverse = false;
-  let numeric = false;
-  let unique = false;
-  const files: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  // Parse arguments
-  for (const arg of ctx.args) {
-    if (arg === "-r") {
-      reverse = true;
-    } else if (arg === "-n") {
-      numeric = true;
-    } else if (arg === "-u") {
-      unique = true;
-    } else if (arg.startsWith("-")) {
-      for (const flag of arg.slice(1)) {
-        if (flag === "r") reverse = true;
-        else if (flag === "n") numeric = true;
-        else if (flag === "u") unique = true;
-      }
-    } else {
-      files.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
+
+  const { reverse, numeric, unique } = result.flags;
+  const files = result.args;
 
   let allLines: string[] = [];
 

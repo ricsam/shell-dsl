@@ -1,52 +1,68 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface TreeFlags {
+  all: boolean;
+  directoriesOnly: boolean;
+  maxDepth: number;
+}
+
+const spec = {
+  name: "tree",
+  flags: [
+    { short: "a", long: "all" },
+    { short: "d" },
+    { short: "L", takesValue: true },
+  ] as FlagDefinition[],
+  usage: "tree [-ad] [-L level] [directory ...]",
+};
+
+const defaults: TreeFlags = { all: false, directoriesOnly: false, maxDepth: Infinity };
+
+interface HandlerResult {
+  error?: string;
+}
+
+let handlerResult: HandlerResult = {};
+
+const handler = (flags: TreeFlags, flag: FlagDefinition, value?: string) => {
+  if (flag.short === "a") flags.all = true;
+  if (flag.short === "d") flags.directoriesOnly = true;
+  if (flag.short === "L" && value) {
+    const depth = parseInt(value, 10);
+    if (isNaN(depth) || !/^\d+$/.test(value)) {
+      handlerResult.error = `tree: -L option requires a numeric argument\nusage: ${spec.usage}\n`;
+    } else {
+      flags.maxDepth = depth;
+    }
+  }
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const tree: Command = async (ctx) => {
-  let showAll = false;
-  let directoriesOnly = false;
-  let maxDepth = Infinity;
-  let targetPath = ".";
+  // Reset handler result for each invocation
+  handlerResult = {};
 
-  // Parse arguments
-  const args = [...ctx.args];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "-a" || arg === "--all") {
-      showAll = true;
-    } else if (arg === "-d") {
-      directoriesOnly = true;
-    } else if (arg === "-L") {
-      const depthArg = args[++i];
-      if (depthArg === undefined || isNaN(parseInt(depthArg, 10))) {
-        await ctx.stderr.writeText("tree: missing argument to -L\n");
-        return 1;
-      }
-      maxDepth = parseInt(depthArg, 10);
-      if (maxDepth < 1) {
-        await ctx.stderr.writeText("tree: Invalid level, must be greater than 0\n");
-        return 1;
-      }
-    } else if (arg.startsWith("-L")) {
-      // Handle -L2 format (no space)
-      const depthStr = arg.slice(2);
-      const depth = parseInt(depthStr, 10);
-      if (isNaN(depth) || depth < 1) {
-        await ctx.stderr.writeText("tree: Invalid level, must be greater than 0\n");
-        return 1;
-      }
-      maxDepth = depth;
-    } else if (arg.startsWith("-") && arg !== "-") {
-      // Handle combined short flags
-      for (const flag of arg.slice(1)) {
-        if (flag === "a") showAll = true;
-        else if (flag === "d") directoriesOnly = true;
-        else {
-          await ctx.stderr.writeText(`tree: Invalid argument -${flag}\n`);
-          return 1;
-        }
-      }
-    } else {
-      targetPath = arg;
-    }
+  const result = parser.parse(ctx.args);
+
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
+  }
+
+  if (handlerResult.error) {
+    await ctx.stderr.writeText(handlerResult.error);
+    return 1;
+  }
+
+  const { all: showAll, directoriesOnly, maxDepth } = result.flags;
+  const targetPath = result.args[0] ?? ".";
+
+  // Validate maxDepth
+  if (maxDepth < 1) {
+    await ctx.stderr.writeText("tree: Invalid level, must be greater than 0\n");
+    return 1;
   }
 
   const resolvedPath = ctx.fs.resolve(ctx.cwd, targetPath);

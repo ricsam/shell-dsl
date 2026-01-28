@@ -158,7 +158,7 @@ describe("tree command", () => {
   test("-L requires argument", async () => {
     const result = await sh`tree -L`.nothrow();
     expect(result.exitCode).toBe(1);
-    expect(result.stderr.toString()).toContain("missing argument");
+    expect(result.stderr.toString()).toContain("requires an argument");
   });
 
   test("-L with invalid value", async () => {
@@ -170,7 +170,7 @@ describe("tree command", () => {
   test("-L with non-numeric value", async () => {
     const result = await sh`tree -L abc`.nothrow();
     expect(result.exitCode).toBe(1);
-    expect(result.stderr.toString()).toContain("missing argument");
+    expect(result.stderr.toString()).toContain("requires a numeric argument");
   });
 
   test("entries are sorted alphabetically", async () => {
@@ -203,9 +203,17 @@ describe("tree command", () => {
     expect(result).toContain("├── ");
   });
 
-  test("invalid flag returns error", async () => {
+  test("invalid short flag returns error with usage", async () => {
     const result = await sh`tree -x /mydir`.nothrow();
     expect(result.exitCode).toBe(1);
-    expect(result.stderr.toString()).toContain("Invalid argument");
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`tree --invalid /mydir`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
   });
 });

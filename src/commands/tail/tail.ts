@@ -1,23 +1,48 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface TailFlags {
+  lines: number;
+}
+
+const spec = {
+  name: "tail",
+  flags: [
+    { short: "n", long: "lines", takesValue: true },
+  ] as FlagDefinition[],
+  usage: "tail [-n lines] [file ...]",
+};
+
+const defaults: TailFlags = { lines: 10 };
+
+const handler = (flags: TailFlags, flag: FlagDefinition, value?: string) => {
+  if (flag.short === "n" && value) {
+    flags.lines = parseInt(value, 10);
+  }
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const tail: Command = async (ctx) => {
-  let numLines = 10;
-  const files: string[] = [];
-
-  // Parse arguments
-  for (let i = 0; i < ctx.args.length; i++) {
-    const arg = ctx.args[i]!;
-    if (arg === "-n" && ctx.args[i + 1]) {
-      numLines = parseInt(ctx.args[i + 1]!, 10);
-      i++;
-    } else if (arg.startsWith("-n")) {
-      numLines = parseInt(arg.slice(2), 10);
-    } else if (arg.startsWith("-") && /^\d+$/.test(arg.slice(1))) {
-      numLines = parseInt(arg.slice(1), 10);
-    } else if (!arg.startsWith("-")) {
-      files.push(arg);
+  // Pre-process args to handle legacy -N format (e.g., -5 means -n 5)
+  const processedArgs: string[] = [];
+  for (const arg of ctx.args) {
+    if (arg.startsWith("-") && /^-\d+$/.test(arg)) {
+      processedArgs.push("-n", arg.slice(1));
+    } else {
+      processedArgs.push(arg);
     }
   }
+
+  const result = parser.parse(processedArgs);
+
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
+  }
+
+  const numLines = result.flags.lines;
+  const files = result.args;
 
   if (isNaN(numLines) || numLines < 0) {
     await ctx.stderr.writeText("tail: invalid number of lines\n");

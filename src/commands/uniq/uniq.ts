@@ -1,29 +1,42 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface UniqFlags {
+  count: boolean;
+  duplicates: boolean;
+  unique: boolean;
+}
+
+const spec = {
+  name: "uniq",
+  flags: [
+    { short: "c", long: "count" },
+    { short: "d", long: "repeated" },
+    { short: "u", long: "unique" },
+  ] as FlagDefinition[],
+  usage: "uniq [-cdu] [input [output]]",
+};
+
+const defaults: UniqFlags = { count: false, duplicates: false, unique: false };
+
+const handler = (flags: UniqFlags, flag: FlagDefinition) => {
+  if (flag.short === "c") flags.count = true;
+  if (flag.short === "d") flags.duplicates = true;
+  if (flag.short === "u") flags.unique = true;
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const uniq: Command = async (ctx) => {
-  let countMode = false;
-  let duplicatesOnly = false;
-  let uniqueOnly = false;
-  const files: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  // Parse arguments
-  for (const arg of ctx.args) {
-    if (arg === "-c") {
-      countMode = true;
-    } else if (arg === "-d") {
-      duplicatesOnly = true;
-    } else if (arg === "-u") {
-      uniqueOnly = true;
-    } else if (arg.startsWith("-")) {
-      for (const flag of arg.slice(1)) {
-        if (flag === "c") countMode = true;
-        else if (flag === "d") duplicatesOnly = true;
-        else if (flag === "u") uniqueOnly = true;
-      }
-    } else {
-      files.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
+
+  const { count: countMode, duplicates: duplicatesOnly, unique: uniqueOnly } = result.flags;
+  const files = result.args;
 
   let lines: string[] = [];
 

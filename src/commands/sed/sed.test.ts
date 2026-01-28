@@ -311,4 +311,20 @@ describe("sed command", () => {
       expect(result).toBe("foo\n\nbar\n");
     });
   });
+
+  describe("Invalid Flags", () => {
+    test("invalid short flag returns error with usage", async () => {
+      const result = await sh`sed -x 's/a/b/' /data.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid option");
+      expect(result.stderr.toString()).toContain("usage:");
+    });
+
+    test("invalid long flag returns error with usage", async () => {
+      const result = await sh`sed --invalid 's/a/b/' /data.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("unrecognized option");
+      expect(result.stderr.toString()).toContain("usage:");
+    });
+  });
 });

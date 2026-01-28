@@ -108,4 +108,18 @@ describe("wc command", () => {
     // wc counts lines based on \n splits, content without newline still counts as 1 line
     expect(result).toContain("no-newline.txt");
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`wc -x /lines.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`wc --invalid /lines.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

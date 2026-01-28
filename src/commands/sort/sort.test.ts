@@ -99,4 +99,18 @@ describe("sort command", () => {
     expect(lines[0]).toBe("foo");
     expect(lines[2]).toBe("bar");
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`sort -x /alpha.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`sort --invalid /alpha.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

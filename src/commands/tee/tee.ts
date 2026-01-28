@@ -1,16 +1,35 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface TeeFlags {
+  append: boolean;
+}
+
+const spec = {
+  name: "tee",
+  flags: [
+    { short: "a", long: "append" },
+  ] as FlagDefinition[],
+  usage: "tee [-a] [file ...]",
+};
+
+const defaults: TeeFlags = { append: false };
+
+const handler = (flags: TeeFlags, flag: FlagDefinition) => {
+  if (flag.short === "a") flags.append = true;
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const tee: Command = async (ctx) => {
-  let append = false;
-  const files: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  for (const arg of ctx.args) {
-    if (arg === "-a" || arg === "--append") {
-      append = true;
-    } else if (!arg.startsWith("-")) {
-      files.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
+
+  const files = result.args;
 
   // Read all stdin content
   const content = await ctx.stdin.buffer();
@@ -22,7 +41,7 @@ export const tee: Command = async (ctx) => {
   for (const file of files) {
     const path = ctx.fs.resolve(ctx.cwd, file);
     try {
-      if (append) {
+      if (result.flags.append) {
         await ctx.fs.appendFile(path, content);
       } else {
         await ctx.fs.writeFile(path, content);

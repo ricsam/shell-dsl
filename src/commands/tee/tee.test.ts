@@ -76,4 +76,18 @@ describe("tee command", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("tee:");
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`echo hi | tee -x /out.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`echo hi | tee --invalid /out.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

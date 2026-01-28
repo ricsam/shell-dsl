@@ -1,4 +1,5 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition, type FlagError } from "../../utils/flag-parser.ts";
 
 interface GrepOptions {
   patterns: string[];
@@ -21,8 +22,36 @@ interface GrepOptions {
   recursive: boolean;          // -r/-R
 }
 
-function parseArgs(args: string[]): { options: GrepOptions; files: string[] } {
-  const options: GrepOptions = {
+const spec = {
+  name: "grep",
+  flags: [
+    { short: "E", long: "extended-regexp" },
+    { short: "F", long: "fixed-strings" },
+    { short: "i", long: "ignore-case" },
+    { short: "w", long: "word-regexp" },
+    { short: "x", long: "line-regexp" },
+    { short: "v", long: "invert-match" },
+    { short: "c", long: "count" },
+    { short: "l", long: "files-with-matches" },
+    { short: "L", long: "files-without-match" },
+    { short: "n", long: "line-number" },
+    { short: "o", long: "only-matching" },
+    { short: "q", long: "quiet" },
+    { short: "H", long: "with-filename" },
+    { short: "h", long: "no-filename" },
+    { short: "r", long: "recursive" },
+    { short: "R" },
+    { short: "e", long: "regexp", takesValue: true },
+    { short: "m", long: "max-count", takesValue: true },
+    { short: "A", long: "after-context", takesValue: true },
+    { short: "B", long: "before-context", takesValue: true },
+    { short: "C", long: "context", takesValue: true },
+  ] as FlagDefinition[],
+  usage: "grep [-ivnclLqHhEFwxorR] [-e pattern] [-m num] pattern [file ...]",
+};
+
+function createDefaults(): GrepOptions {
+  return {
     patterns: [],
     extendedRegex: true,  // JS regex is extended by default
     fixedStrings: false,
@@ -42,126 +71,39 @@ function parseArgs(args: string[]): { options: GrepOptions; files: string[] } {
     afterContext: 0,
     recursive: false,
   };
-  const files: string[] = [];
-  let pattern: string | undefined;
-
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i]!;
-
-    // Handle long-form options first
-    if (arg === "--") {
-      // Everything after -- is a file
-      files.push(...args.slice(i + 1));
-      break;
-    }
-
-    // Handle -e PATTERN (explicit pattern)
-    if (arg === "-e" && args[i + 1] !== undefined) {
-      options.patterns.push(args[i + 1]!);
-      i += 2;
-      continue;
-    }
-
-    // Handle -m NUM (max matches)
-    if (arg === "-m" && args[i + 1] !== undefined) {
-      options.maxMatches = parseInt(args[i + 1]!, 10);
-      i += 2;
-      continue;
-    }
-    if (arg.startsWith("-m") && arg.length > 2) {
-      options.maxMatches = parseInt(arg.slice(2), 10);
-      i++;
-      continue;
-    }
-
-    // Handle -A NUM (after context)
-    if (arg === "-A" && args[i + 1] !== undefined) {
-      options.afterContext = parseInt(args[i + 1]!, 10);
-      i += 2;
-      continue;
-    }
-    if (arg.startsWith("-A") && arg.length > 2) {
-      options.afterContext = parseInt(arg.slice(2), 10);
-      i++;
-      continue;
-    }
-
-    // Handle -B NUM (before context)
-    if (arg === "-B" && args[i + 1] !== undefined) {
-      options.beforeContext = parseInt(args[i + 1]!, 10);
-      i += 2;
-      continue;
-    }
-    if (arg.startsWith("-B") && arg.length > 2) {
-      options.beforeContext = parseInt(arg.slice(2), 10);
-      i++;
-      continue;
-    }
-
-    // Handle -C NUM (context both sides)
-    if (arg === "-C" && args[i + 1] !== undefined) {
-      const num = parseInt(args[i + 1]!, 10);
-      options.beforeContext = num;
-      options.afterContext = num;
-      i += 2;
-      continue;
-    }
-    if (arg.startsWith("-C") && arg.length > 2) {
-      const num = parseInt(arg.slice(2), 10);
-      options.beforeContext = num;
-      options.afterContext = num;
-      i++;
-      continue;
-    }
-
-    // Handle combined short flags like -iv, -in, etc.
-    if (arg.startsWith("-") && arg.length > 1 && !arg.startsWith("--")) {
-      for (const flag of arg.slice(1)) {
-        switch (flag) {
-          case "v": options.invert = true; break;
-          case "i": options.ignoreCase = true; break;
-          case "n": options.showLineNumbers = true; break;
-          case "c": options.countOnly = true; break;
-          case "l": options.filesWithMatches = true; break;
-          case "L": options.filesWithoutMatches = true; break;
-          case "q": options.quiet = true; break;
-          case "H": options.showFilename = true; break;
-          case "h": options.showFilename = false; break;
-          case "E": options.extendedRegex = true; break;
-          case "F": options.fixedStrings = true; break;
-          case "w": options.wholeWord = true; break;
-          case "x": options.wholeLine = true; break;
-          case "o": options.onlyMatching = true; break;
-          case "r":
-          case "R": options.recursive = true; break;
-        }
-      }
-      i++;
-      continue;
-    }
-
-    // Non-flag argument
-    if (pattern === undefined && options.patterns.length === 0) {
-      pattern = arg;
-    } else {
-      files.push(arg);
-    }
-    i++;
-  }
-
-  // Add the positional pattern if we have one and no -e patterns
-  if (pattern !== undefined) {
-    if (options.patterns.length === 0) {
-      options.patterns.push(pattern);
-    } else {
-      // If we have -e patterns, the positional arg is actually a file
-      files.unshift(pattern);
-    }
-  }
-
-  return { options, files };
 }
+
+const handler = (flags: GrepOptions, flag: FlagDefinition, value?: string) => {
+  switch (flag.short) {
+    case "E": flags.extendedRegex = true; break;
+    case "F": flags.fixedStrings = true; break;
+    case "i": flags.ignoreCase = true; break;
+    case "w": flags.wholeWord = true; break;
+    case "x": flags.wholeLine = true; break;
+    case "v": flags.invert = true; break;
+    case "c": flags.countOnly = true; break;
+    case "l": flags.filesWithMatches = true; break;
+    case "L": flags.filesWithoutMatches = true; break;
+    case "n": flags.showLineNumbers = true; break;
+    case "o": flags.onlyMatching = true; break;
+    case "q": flags.quiet = true; break;
+    case "H": flags.showFilename = true; break;
+    case "h": flags.showFilename = false; break;
+    case "r":
+    case "R": flags.recursive = true; break;
+    case "e": if (value) flags.patterns.push(value); break;
+    case "m": if (value) flags.maxMatches = parseInt(value, 10); break;
+    case "A": if (value) flags.afterContext = parseInt(value, 10); break;
+    case "B": if (value) flags.beforeContext = parseInt(value, 10); break;
+    case "C":
+      if (value) {
+        const num = parseInt(value, 10);
+        flags.beforeContext = num;
+        flags.afterContext = num;
+      }
+      break;
+  }
+};
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -192,18 +134,30 @@ function buildMatcher(options: GrepOptions): RegExp {
   return new RegExp(combined, flags);
 }
 
-interface LineInfo {
-  text: string;
-  lineNum: number;
-  isMatch: boolean;
-}
-
 export const grep: Command = async (ctx) => {
-  const { options, files } = parseArgs(ctx.args);
+  // Create fresh parser with fresh defaults for each invocation
+  const parser = createFlagParser(spec, createDefaults(), handler);
+  const result = parser.parse(ctx.args);
 
-  if (options.patterns.length === 0) {
-    await ctx.stderr.writeText("grep: missing pattern\n");
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
     return 1;
+  }
+
+  const options = result.flags;
+  const args = result.args;
+
+  // First positional arg is pattern if no -e patterns
+  let files: string[];
+  if (options.patterns.length === 0) {
+    if (args.length === 0) {
+      await ctx.stderr.writeText("grep: missing pattern\n");
+      return 1;
+    }
+    options.patterns.push(args[0]!);
+    files = args.slice(1);
+  } else {
+    files = args;
   }
 
   let regex: RegExp;
@@ -341,8 +295,6 @@ export const grep: Command = async (ctx) => {
     let fileFound = false;
     let fileMatchCount = 0;
     let lastPrintedLine = -1;
-    let needSeparator = false;
-    let afterRemaining = 0;
 
     // First pass: find all matching lines
     const matchingLines = new Set<number>();

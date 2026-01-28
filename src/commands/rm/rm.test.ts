@@ -94,4 +94,18 @@ describe("rm command", () => {
     const result = await sh`rm -f`.nothrow();
     expect(result.exitCode).toBe(0);
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`rm -x /file1.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`rm --invalid /file1.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

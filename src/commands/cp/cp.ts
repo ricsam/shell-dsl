@@ -1,28 +1,42 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface CpFlags {
+  recursive: boolean;
+  noClobber: boolean;
+}
+
+const spec = {
+  name: "cp",
+  flags: [
+    { short: "r", long: "recursive" },
+    { short: "R" },
+    { short: "n", long: "no-clobber" },
+    { short: "f", long: "force" },
+  ] as FlagDefinition[],
+  usage: "cp [-rRnf] source ... dest",
+};
+
+const defaults: CpFlags = { recursive: false, noClobber: false };
+
+const handler = (flags: CpFlags, flag: FlagDefinition) => {
+  if (flag.short === "r" || flag.short === "R") flags.recursive = true;
+  if (flag.short === "n") flags.noClobber = true;
+  // -f is default behavior, so we don't need to do anything
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const cp: Command = async (ctx) => {
-  let recursive = false;
-  let noClobber = false;
-  const paths: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  for (const arg of ctx.args) {
-    if (arg === "-r" || arg === "-R" || arg === "--recursive") {
-      recursive = true;
-    } else if (arg === "-n" || arg === "--no-clobber") {
-      noClobber = true;
-    } else if (arg === "-f" || arg === "--force") {
-      // Force is default behavior, just accept the flag
-    } else if (arg.startsWith("-")) {
-      // Parse combined flags like -rn
-      for (const flag of arg.slice(1)) {
-        if (flag === "r" || flag === "R") recursive = true;
-        else if (flag === "n") noClobber = true;
-        else if (flag === "f") { /* force is default */ }
-      }
-    } else {
-      paths.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
+
+  const { recursive, noClobber } = result.flags;
+  const paths = result.args;
 
   if (paths.length < 2) {
     await ctx.stderr.writeText("cp: missing destination file operand\n");

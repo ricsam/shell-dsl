@@ -1,24 +1,38 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface MvFlags {
+  noClobber: boolean;
+}
+
+const spec = {
+  name: "mv",
+  flags: [
+    { short: "n", long: "no-clobber" },
+    { short: "f", long: "force" },
+  ] as FlagDefinition[],
+  usage: "mv [-nf] source ... dest",
+};
+
+const defaults: MvFlags = { noClobber: false };
+
+const handler = (flags: MvFlags, flag: FlagDefinition) => {
+  if (flag.short === "n") flags.noClobber = true;
+  // -f is default behavior, so we don't need to do anything
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const mv: Command = async (ctx) => {
-  let noClobber = false;
-  const paths: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  for (const arg of ctx.args) {
-    if (arg === "-n" || arg === "--no-clobber") {
-      noClobber = true;
-    } else if (arg === "-f" || arg === "--force") {
-      // Force is default behavior, just accept the flag
-    } else if (arg.startsWith("-")) {
-      // Parse combined flags
-      for (const flag of arg.slice(1)) {
-        if (flag === "n") noClobber = true;
-        else if (flag === "f") { /* force is default */ }
-      }
-    } else {
-      paths.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
+
+  const { noClobber } = result.flags;
+  const paths = result.args;
 
   if (paths.length < 2) {
     await ctx.stderr.writeText("mv: missing destination file operand\n");

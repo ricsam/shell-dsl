@@ -253,4 +253,20 @@ describe("awk command", () => {
       expect(result).toBe("hello world\n");
     });
   });
+
+  describe("Invalid Flags", () => {
+    test("invalid short flag returns error with usage", async () => {
+      const result = await sh`awk -x '{print}' /data.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("invalid option");
+      expect(result.stderr.toString()).toContain("usage:");
+    });
+
+    test("invalid long flag returns error with usage", async () => {
+      const result = await sh`awk --invalid '{print}' /data.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("unrecognized option");
+      expect(result.stderr.toString()).toContain("usage:");
+    });
+  });
 });

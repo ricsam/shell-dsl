@@ -100,4 +100,18 @@ describe("head command", () => {
     const result = await sh`head -n abc /five.txt`.nothrow();
     expect(result.exitCode).toBe(1);
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`head -x /five.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`head --invalid /five.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

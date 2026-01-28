@@ -115,4 +115,18 @@ describe("cp command", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("missing destination");
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`cp -x /file1.txt /dest.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`cp --invalid /file1.txt /dest.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

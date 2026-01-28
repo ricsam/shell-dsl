@@ -119,4 +119,18 @@ describe("ls command", () => {
     const result = await sh`ls /empty`.text();
     expect(result.trim()).toBe("");
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`ls -x /dir`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`ls --invalid /dir`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

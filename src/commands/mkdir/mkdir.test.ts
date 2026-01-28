@@ -81,4 +81,18 @@ describe("mkdir command", () => {
     const result = await sh`mkdir /missing/parent/dir`.nothrow();
     expect(result.stderr.toString()).toContain("missing/parent/dir");
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`mkdir -x /newdir`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`mkdir --invalid /newdir`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

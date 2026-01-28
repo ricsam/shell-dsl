@@ -74,4 +74,18 @@ describe("touch command", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("cannot touch");
   });
+
+  test("invalid short flag returns error with usage", async () => {
+    const result = await sh`touch -x /file.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("invalid option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
+
+  test("invalid long flag returns error with usage", async () => {
+    const result = await sh`touch --invalid /file.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("unrecognized option");
+    expect(result.stderr.toString()).toContain("usage:");
+  });
 });

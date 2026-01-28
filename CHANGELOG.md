@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.10
+
+### Patch Changes
+
+- add better error messages to commands
+
 ## 0.0.9
 
 ### Patch Changes

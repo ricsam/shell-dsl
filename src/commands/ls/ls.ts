@@ -1,33 +1,42 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface LsFlags {
+  all: boolean;
+  long: boolean;
+  onePerLine: boolean;
+}
+
+const spec = {
+  name: "ls",
+  flags: [
+    { short: "a", long: "all" },
+    { short: "l" },
+    { short: "1" },
+  ] as FlagDefinition[],
+  usage: "ls [-al1] [file ...]",
+};
+
+const defaults: LsFlags = { all: false, long: false, onePerLine: false };
+
+const handler = (flags: LsFlags, flag: FlagDefinition) => {
+  if (flag.short === "a") flags.all = true;
+  if (flag.short === "l") flags.long = true;
+  if (flag.short === "1") flags.onePerLine = true;
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const ls: Command = async (ctx) => {
-  let showAll = false;
-  let longFormat = false;
-  let onePerLine = false;
-  const paths: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  // Parse arguments
-  for (const arg of ctx.args) {
-    if (arg === "-a" || arg === "--all") {
-      showAll = true;
-    } else if (arg === "-l") {
-      longFormat = true;
-    } else if (arg === "-1") {
-      onePerLine = true;
-    } else if (arg.startsWith("-")) {
-      for (const flag of arg.slice(1)) {
-        if (flag === "a") showAll = true;
-        else if (flag === "l") longFormat = true;
-        else if (flag === "1") onePerLine = true;
-      }
-    } else {
-      paths.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
 
-  if (paths.length === 0) {
-    paths.push(".");
-  }
+  const { all: showAll, long: longFormat, onePerLine } = result.flags;
+  const paths = result.args.length === 0 ? ["."] : result.args;
 
   for (let i = 0; i < paths.length; i++) {
     const pathArg = paths[i]!;

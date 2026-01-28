@@ -1,16 +1,35 @@
 import type { Command } from "../../types.ts";
+import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+
+interface TouchFlags {
+  noCreate: boolean;
+}
+
+const spec = {
+  name: "touch",
+  flags: [
+    { short: "c", long: "no-create" },
+  ] as FlagDefinition[],
+  usage: "touch [-c] file ...",
+};
+
+const defaults: TouchFlags = { noCreate: false };
+
+const handler = (flags: TouchFlags, flag: FlagDefinition) => {
+  if (flag.short === "c") flags.noCreate = true;
+};
+
+const parser = createFlagParser(spec, defaults, handler);
 
 export const touch: Command = async (ctx) => {
-  let noCreate = false;
-  const files: string[] = [];
+  const result = parser.parse(ctx.args);
 
-  for (const arg of ctx.args) {
-    if (arg === "-c" || arg === "--no-create") {
-      noCreate = true;
-    } else if (!arg.startsWith("-")) {
-      files.push(arg);
-    }
+  if (result.error) {
+    await parser.writeError(result.error, ctx.stderr);
+    return 1;
   }
+
+  const files = result.args;
 
   if (files.length === 0) {
     await ctx.stderr.writeText("touch: missing file operand\n");
@@ -25,7 +44,7 @@ export const touch: Command = async (ctx) => {
         // Update mtime by reading and writing back
         const content = await ctx.fs.readFile(path);
         await ctx.fs.writeFile(path, content);
-      } else if (!noCreate) {
+      } else if (!result.flags.noCreate) {
         // Create empty file
         await ctx.fs.writeFile(path, "");
       }
