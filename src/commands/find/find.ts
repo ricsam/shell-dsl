@@ -164,6 +164,7 @@ export const find: Command = async (ctx) => {
 
   // Process each starting path
   for (const startPath of paths) {
+    const normalizedPath = startPath === "/" ? "/" : startPath.replace(/\/+$/, '');
     const resolvedStart = ctx.fs.resolve(ctx.cwd, startPath);
 
     // Check if path exists
@@ -255,10 +256,10 @@ export const find: Command = async (ctx) => {
       }
 
       if (matches && (options.minDepth === undefined || options.minDepth <= 0)) {
-        await ctx.stdout.writeText(startPath + "\n");
+        await ctx.stdout.writeText(normalizedPath + "\n");
       }
     } else {
-      await traverse(resolvedStart, startPath, 0);
+      await traverse(resolvedStart, normalizedPath, 0);
     }
   }
 

@@ -270,6 +270,18 @@ describe("find command", () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr.toString()).toContain("missing argument to '-mindepth'");
     });
+
+    test("invalid argument to -mindepth returns error with stderr", async () => {
+      const result = await sh`find /data -mindepth abc`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("Invalid argument 'abc' to -mindepth");
+    });
+
+    test("negative argument to -mindepth returns error with stderr", async () => {
+      const result = await sh`find /data -mindepth -1`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("Invalid argument '-1' to -mindepth");
+    });
   });
 
   describe("combined filters", () => {
@@ -394,5 +406,12 @@ describe("find command", () => {
       const result = await sh`find /data -maxdepth 0`.text();
       expect(result).toBe("/data\n");
     });
+  });
+
+  test("trailing slash in path does not produce double slashes", async () => {
+    const result = await sh`find /data/ -type f`.text();
+    const lines = result.trim().split("\n");
+    expect(lines).toContain("/data/file1.txt");
+    expect(lines).not.toContain("/data//file1.txt");
   });
 });

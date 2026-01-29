@@ -237,14 +237,22 @@ describe("test command", () => {
   });
 
   describe("Errors", () => {
-    test("unknown operator returns exit code 2", async () => {
+    test("unknown operator returns exit code 2 with stderr", async () => {
       const result = await sh`test --unknown foo`.nothrow();
       expect(result.exitCode).toBe(2);
+      expect(result.stderr.toString()).toContain("test: unknown operator:");
     });
 
-    test("too many arguments returns exit code 2", async () => {
+    test("unknown binary operator returns exit code 2 with stderr", async () => {
+      const result = await sh`test a --badop b`.nothrow();
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr.toString()).toContain("test: unknown operator:");
+    });
+
+    test("too many arguments returns exit code 2 with stderr", async () => {
       const result = await sh`test a b c d e`.nothrow();
       expect(result.exitCode).toBe(2);
+      expect(result.stderr.toString()).toContain("test: too many arguments");
     });
 
     test("empty test returns 1", async () => {

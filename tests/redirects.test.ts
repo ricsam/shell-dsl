@@ -110,4 +110,30 @@ describe("Redirections", () => {
       expect(vol.readFileSync("/copy.txt", "utf8")).toBe("hello world");
     });
   });
+
+  describe("Redirect error handling", () => {
+    test("< nonexistent file produces stderr", async () => {
+      const result = await sh`cat < /nonexistent.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("sh: /nonexistent.txt:");
+    });
+
+    test("> to nonexistent parent dir produces stderr", async () => {
+      const result = await sh`echo hi > /no-such-dir/file.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("sh: /no-such-dir/file.txt:");
+    });
+
+    test(">> to nonexistent parent dir produces stderr", async () => {
+      const result = await sh`echo hi >> /no-such-dir/file.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("sh: /no-such-dir/file.txt:");
+    });
+
+    test("2> to nonexistent parent dir produces stderr", async () => {
+      const result = await sh`echo hi 2> /no-such-dir/file.txt`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("sh: /no-such-dir/file.txt:");
+    });
+  });
 });

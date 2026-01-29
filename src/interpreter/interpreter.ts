@@ -143,19 +143,26 @@ export class Interpreter {
     const fileWritePromises: Promise<void>[] = [];
 
     for (const redirect of node.redirects) {
-      const result = await this.handleRedirect(
-        redirect,
-        actualStdin,
-        actualStdout,
-        actualStderr
-      );
-      actualStdin = result.stdin;
-      actualStdout = result.stdout;
-      actualStderr = result.stderr;
-      stderrToStdout = result.stderrToStdout || stderrToStdout;
-      stdoutToStderr = result.stdoutToStderr || stdoutToStderr;
-      if (result.fileWritePromise) {
-        fileWritePromises.push(result.fileWritePromise);
+      try {
+        const result = await this.handleRedirect(
+          redirect,
+          actualStdin,
+          actualStdout,
+          actualStderr
+        );
+        actualStdin = result.stdin;
+        actualStdout = result.stdout;
+        actualStderr = result.stderr;
+        stderrToStdout = result.stderrToStdout || stderrToStdout;
+        stdoutToStderr = result.stdoutToStderr || stdoutToStderr;
+        if (result.fileWritePromise) {
+          fileWritePromises.push(result.fileWritePromise);
+        }
+      } catch (err) {
+        const target = await this.evaluateNode(redirect.target);
+        const message = err instanceof Error ? err.message : String(err);
+        await stderr.writeText(`sh: ${target}: ${message}\n`);
+        return 1;
       }
     }
 
@@ -207,7 +214,18 @@ export class Interpreter {
     }
 
     // Wait for all file write operations to complete
-    await Promise.all(fileWritePromises);
+    try {
+      await Promise.all(fileWritePromises);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Find the redirect target for the error message
+      const writeRedirects = node.redirects.filter(r => r.mode !== "<" && r.mode !== "2>&1" && r.mode !== "1>&2");
+      const target = writeRedirects.length > 0
+        ? await this.evaluateNode(writeRedirects[writeRedirects.length - 1]!.target)
+        : "unknown";
+      await stderr.writeText(`sh: ${target}: ${message}\n`);
+      exitCode = 1;
+    }
 
     return exitCode;
   }

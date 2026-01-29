@@ -5,6 +5,7 @@ import { Interpreter } from "../src/interpreter/index.ts";
 import { lex } from "../src/lexer/index.ts";
 import { parse } from "../src/parser/index.ts";
 import { builtinCommands } from "../src/commands/index.ts";
+import type { Command } from "../src/types.ts";
 
 describe("Interpreter", () => {
   let vol: InstanceType<typeof Volume>;
@@ -150,6 +151,29 @@ describe("Interpreter", () => {
     test("expands variable with path concatenation", async () => {
       const result = await run('echo "$HOME/bin:$HOME/lib"');
       expect(result.stdout.toString()).toBe("/home/testuser/bin:/home/testuser/lib\n");
+    });
+  });
+
+  describe("Error handling", () => {
+    test("command that throws produces stderr with error message", async () => {
+      const throwingCmd: Command = async () => {
+        throw new Error("something went wrong");
+      };
+
+      const memfs = createFsFromVolume(new Volume());
+      const fs = createVirtualFS(memfs);
+      const interp = new Interpreter({
+        fs,
+        cwd: "/",
+        env: {},
+        commands: { ...builtinCommands, boom: throwingCmd },
+      });
+
+      const tokens = lex("boom");
+      const ast = parse(tokens);
+      const result = await interp.execute(ast);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("boom: something went wrong");
     });
   });
 });
