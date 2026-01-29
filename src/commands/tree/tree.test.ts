@@ -210,6 +210,19 @@ describe("tree command", () => {
     expect(result.stderr.toString()).toContain("usage:");
   });
 
+  test("--dirsfirst flag is accepted without error", async () => {
+    const result = await sh`tree --dirsfirst /mydir`.nothrow();
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("--dirsfirst shows directories before files", async () => {
+    const result = await sh`tree --dirsfirst /mydir`.text();
+    const lines = result.split("\n");
+    const subdirIndex = lines.findIndex((l) => l.includes("subdir"));
+    const file1Index = lines.findIndex((l) => l.includes("file1.txt"));
+    expect(subdirIndex).toBeLessThan(file1Index);
+  });
+
   test("invalid long flag returns error with usage", async () => {
     const result = await sh`tree --invalid /mydir`.nothrow();
     expect(result.exitCode).toBe(1);

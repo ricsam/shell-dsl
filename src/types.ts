@@ -35,6 +35,7 @@ export interface CommandContext {
   fs: VirtualFS;
   cwd: string;
   env: Record<string, string>;
+  setCwd: (path: string) => void;
 }
 
 export interface Stdin {

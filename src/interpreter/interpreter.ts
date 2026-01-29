@@ -190,6 +190,7 @@ export class Interpreter {
       fs: this.fs,
       cwd: this.cwd,
       env: localEnv,
+      setCwd: (path: string) => this.setCwd(path),
     });
 
     let exitCode: number;
@@ -976,6 +977,7 @@ export class Interpreter {
   }
 
   setCwd(cwd: string): void {
+    this.env.OLDPWD = this.cwd;
     this.cwd = cwd;
   }
 

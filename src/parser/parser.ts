@@ -378,7 +378,16 @@ export class Parser {
       redirects.push(redirect);
       // After a redirect, there might be more words
       while (this.isWordToken()) {
-        args.push(this.parseWordArg());
+        if (this.peek().type === "heredoc") {
+          const heredocToken = this.advance() as Token & { type: "heredoc" };
+          redirects.push({
+            mode: "<",
+            target: this.tokenToNode(heredocToken),
+            heredocContent: true,
+          });
+        } else {
+          args.push(this.parseWordArg());
+        }
       }
     }
 

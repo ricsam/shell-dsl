@@ -24,6 +24,7 @@ export { sed } from "./sed/sed.ts";
 export { awk } from "./awk/awk.ts";
 export { breakCmd, continueCmd } from "./break-continue/break-continue.ts";
 export { colon } from "./colon/colon.ts";
+export { cd } from "./cd/cd.ts";
 
 // Re-export all commands as a bundle
 import { echo } from "./echo/echo.ts";
@@ -50,6 +51,7 @@ import { sed } from "./sed/sed.ts";
 import { awk } from "./awk/awk.ts";
 import { breakCmd, continueCmd } from "./break-continue/break-continue.ts";
 import { colon } from "./colon/colon.ts";
+import { cd } from "./cd/cd.ts";
 
 export const builtinCommands: Record<string, Command> = {
   echo,
@@ -79,4 +81,5 @@ export const builtinCommands: Record<string, Command> = {
   break: breakCmd,
   continue: continueCmd,
   ":": colon,
+  cd,
 };

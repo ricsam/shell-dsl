@@ -331,5 +331,14 @@ EOF`.text();
 EOF`.text();
       expect(result).toBe("  indented\n    more indented\n");
     });
+
+    test("heredoc after output redirect (cat > file << 'EOF')", async () => {
+      const result = await sh`cat > /output.txt << 'EOF'
+hello from heredoc
+EOF`;
+      expect(result.exitCode).toBe(0);
+      const content = vol.readFileSync("/output.txt", "utf8");
+      expect(content).toBe("hello from heredoc\n");
+    });
   });
 });

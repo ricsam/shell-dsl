@@ -5,6 +5,7 @@ interface TreeFlags {
   all: boolean;
   directoriesOnly: boolean;
   maxDepth: number;
+  dirsfirst: boolean;
 }
 
 const spec = {
@@ -13,11 +14,12 @@ const spec = {
     { short: "a", long: "all" },
     { short: "d" },
     { short: "L", takesValue: true },
+    { long: "dirsfirst" },
   ] as FlagDefinition[],
-  usage: "tree [-ad] [-L level] [directory ...]",
+  usage: "tree [-ad] [-L level] [--dirsfirst] [directory ...]",
 };
 
-const defaults: TreeFlags = { all: false, directoriesOnly: false, maxDepth: Infinity };
+const defaults: TreeFlags = { all: false, directoriesOnly: false, maxDepth: Infinity, dirsfirst: true };
 
 interface HandlerResult {
   error?: string;
@@ -28,6 +30,7 @@ let handlerResult: HandlerResult = {};
 const handler = (flags: TreeFlags, flag: FlagDefinition, value?: string) => {
   if (flag.short === "a") flags.all = true;
   if (flag.short === "d") flags.directoriesOnly = true;
+  if (flag.long === "dirsfirst") flags.dirsfirst = true;
   if (flag.short === "L" && value) {
     const depth = parseInt(value, 10);
     if (isNaN(depth) || !/^\d+$/.test(value)) {
