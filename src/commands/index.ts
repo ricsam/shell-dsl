@@ -25,6 +25,7 @@ export { awk } from "./awk/awk.ts";
 export { breakCmd, continueCmd } from "./break-continue/break-continue.ts";
 export { colon } from "./colon/colon.ts";
 export { cd } from "./cd/cd.ts";
+export { tr } from "./tr/tr.ts";
 
 // Re-export all commands as a bundle
 import { echo } from "./echo/echo.ts";
@@ -52,6 +53,7 @@ import { awk } from "./awk/awk.ts";
 import { breakCmd, continueCmd } from "./break-continue/break-continue.ts";
 import { colon } from "./colon/colon.ts";
 import { cd } from "./cd/cd.ts";
+import { tr } from "./tr/tr.ts";
 
 export const builtinCommands: Record<string, Command> = {
   echo,
@@ -82,4 +84,5 @@ export const builtinCommands: Record<string, Command> = {
   continue: continueCmd,
   ":": colon,
   cd,
+  tr,
 };
