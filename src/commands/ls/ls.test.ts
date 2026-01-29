@@ -133,4 +133,47 @@ describe("ls command", () => {
     expect(result.stderr.toString()).toContain("unrecognized option");
     expect(result.stderr.toString()).toContain("usage:");
   });
+
+  test("-R lists directory and subdirectories recursively with headers", async () => {
+    const result = await sh`ls -R /dir`.text();
+    expect(result).toContain("/dir:");
+    expect(result).toContain("file1.txt");
+    expect(result).toContain("subdir");
+    expect(result).toContain("/dir/subdir:");
+  });
+
+  test("-laR combines all flags correctly", async () => {
+    const result = await sh`ls -laR /dir`.text();
+    expect(result).toContain("/dir:");
+    expect(result).toContain(".hidden");
+    expect(result).toMatch(/[-d]rwx/);
+    expect(result).toContain("/dir/subdir:");
+  });
+
+  test("-R on a directory with no subdirectories", async () => {
+    vol.mkdirSync("/flat");
+    vol.writeFileSync("/flat/a.txt", "a");
+    vol.writeFileSync("/flat/b.txt", "b");
+    const result = await sh`ls -R /flat`.text();
+    expect(result).toContain("/flat:");
+    expect(result).toContain("a.txt");
+    expect(result).toContain("b.txt");
+    // Should not contain any other header
+    const headers = result.match(/^\S+:$/gm) || [];
+    expect(headers).toHaveLength(1);
+  });
+
+  test("-R on nested directories (multiple levels deep)", async () => {
+    vol.mkdirSync("/deep/a/b", { recursive: true });
+    vol.writeFileSync("/deep/top.txt", "top");
+    vol.writeFileSync("/deep/a/mid.txt", "mid");
+    vol.writeFileSync("/deep/a/b/bottom.txt", "bottom");
+    const result = await sh`ls -R /deep`.text();
+    expect(result).toContain("/deep:");
+    expect(result).toContain("top.txt");
+    expect(result).toContain("/deep/a:");
+    expect(result).toContain("mid.txt");
+    expect(result).toContain("/deep/a/b:");
+    expect(result).toContain("bottom.txt");
+  });
 });

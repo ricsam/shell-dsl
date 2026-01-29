@@ -5,6 +5,7 @@ interface LsFlags {
   all: boolean;
   long: boolean;
   onePerLine: boolean;
+  recursive: boolean;
 }
 
 const spec = {
@@ -13,16 +14,18 @@ const spec = {
     { short: "a", long: "all" },
     { short: "l" },
     { short: "1" },
+    { short: "R" },
   ] as FlagDefinition[],
-  usage: "ls [-al1] [file ...]",
+  usage: "ls [-alR1] [file ...]",
 };
 
-const defaults: LsFlags = { all: false, long: false, onePerLine: false };
+const defaults: LsFlags = { all: false, long: false, onePerLine: false, recursive: false };
 
 const handler = (flags: LsFlags, flag: FlagDefinition) => {
   if (flag.short === "a") flags.all = true;
   if (flag.short === "l") flags.long = true;
   if (flag.short === "1") flags.onePerLine = true;
+  if (flag.short === "R") flags.recursive = true;
 };
 
 const parser = createFlagParser(spec, defaults, handler);
@@ -35,8 +38,65 @@ export const ls: Command = async (ctx) => {
     return 1;
   }
 
-  const { all: showAll, long: longFormat, onePerLine } = result.flags;
+  const { all: showAll, long: longFormat, onePerLine, recursive } = result.flags;
   const paths = result.args.length === 0 ? ["."] : result.args;
+  let needsBlankLine = false;
+
+  const listDir = async (dirPath: string, displayPath: string, showHeader: boolean) => {
+    if (needsBlankLine) await ctx.stdout.writeText("\n");
+    needsBlankLine = true;
+
+    if (showHeader) {
+      await ctx.stdout.writeText(`${displayPath}:\n`);
+    }
+
+    let entries = await ctx.fs.readdir(dirPath);
+
+    if (!showAll) {
+      entries = entries.filter((e) => !e.startsWith("."));
+    }
+
+    entries.sort();
+
+    if (longFormat) {
+      for (const entry of entries) {
+        const entryPath = ctx.fs.resolve(dirPath, entry);
+        try {
+          const entryStat = await ctx.fs.stat(entryPath);
+          const type = entryStat.isDirectory() ? "d" : "-";
+          const perms = "rwxr-xr-x";
+          const size = String(entryStat.size).padStart(8);
+          const date = entryStat.mtime.toISOString().slice(0, 10);
+          await ctx.stdout.writeText(`${type}${perms} ${size} ${date} ${entry}\n`);
+        } catch {
+          await ctx.stdout.writeText(`?????????? ${entry}\n`);
+        }
+      }
+    } else if (onePerLine) {
+      for (const entry of entries) {
+        await ctx.stdout.writeText(entry + "\n");
+      }
+    } else {
+      if (entries.length > 0) {
+        await ctx.stdout.writeText(entries.join("  ") + "\n");
+      }
+    }
+
+    if (recursive) {
+      for (const entry of entries) {
+        const entryPath = ctx.fs.resolve(dirPath, entry);
+        try {
+          const entryStat = await ctx.fs.stat(entryPath);
+          if (entryStat.isDirectory()) {
+            const subDisplay = displayPath === "." ? entry : `${displayPath}/${entry}`;
+            await listDir(entryPath, subDisplay, true);
+          }
+        } catch {
+          // skip entries we can't stat
+        }
+      }
+    }
+  };
 
   for (let i = 0; i < paths.length; i++) {
     const pathArg = paths[i]!;
@@ -46,47 +106,12 @@ export const ls: Command = async (ctx) => {
       const stat = await ctx.fs.stat(path);
 
       if (stat.isFile()) {
-        // It's a file, just print the name
         await ctx.stdout.writeText(ctx.fs.basename(path) + "\n");
         continue;
       }
 
-      // It's a directory
-      if (paths.length > 1) {
-        if (i > 0) await ctx.stdout.writeText("\n");
-        await ctx.stdout.writeText(`${pathArg}:\n`);
-      }
-
-      let entries = await ctx.fs.readdir(path);
-
-      if (!showAll) {
-        entries = entries.filter((e) => !e.startsWith("."));
-      }
-
-      entries.sort();
-
-      if (longFormat) {
-        for (const entry of entries) {
-          const entryPath = ctx.fs.resolve(path, entry);
-          try {
-            const entryStat = await ctx.fs.stat(entryPath);
-            const type = entryStat.isDirectory() ? "d" : "-";
-            const perms = "rwxr-xr-x"; // Simplified permissions
-            const size = String(entryStat.size).padStart(8);
-            const date = entryStat.mtime.toISOString().slice(0, 10);
-            await ctx.stdout.writeText(`${type}${perms} ${size} ${date} ${entry}\n`);
-          } catch {
-            await ctx.stdout.writeText(`?????????? ${entry}\n`);
-          }
-        }
-      } else if (onePerLine) {
-        for (const entry of entries) {
-          await ctx.stdout.writeText(entry + "\n");
-        }
-      } else {
-        // Default: space-separated
-        await ctx.stdout.writeText(entries.join("  ") + "\n");
-      }
+      const showHeader = recursive || paths.length > 1;
+      await listDir(path, pathArg, showHeader);
     } catch (err) {
       await ctx.stderr.writeText(`ls: cannot access '${pathArg}': No such file or directory\n`);
       return 1;

@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.15
+
+### Patch Changes
+
+- ls -R support
+
 ## 0.0.14
 
 ### Patch Changes
