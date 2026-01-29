@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.13
+
+### Patch Changes
+
+- fix BRE-style alternation
+
 ## 0.0.12
 
 ### Patch Changes

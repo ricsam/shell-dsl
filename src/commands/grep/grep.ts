@@ -139,6 +139,9 @@ function buildMatcher(options: GrepOptions): RegExp {
   // If fixed strings mode, escape regex metacharacters
   if (options.fixedStrings) {
     patterns = patterns.map(escapeRegex);
+  } else {
+    // Support BRE-style \| \( \) even in ERE mode for compatibility
+    patterns = patterns.map(p => p.replace(/\\\|/g, "|").replace(/\\\(/g, "(").replace(/\\\)/g, ")"));
   }
 
   // Combine multiple patterns with OR

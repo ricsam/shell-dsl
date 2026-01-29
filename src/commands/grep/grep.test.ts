@@ -232,6 +232,17 @@ describe("grep command", () => {
       expect(result).toBe("foo\nbaz\nfoo bar\n");
     });
 
+    test("BRE-style \\| alternation", async () => {
+      const result = await sh`grep "foo\\|baz" /data.txt`.text();
+      expect(result).toBe("foo\nbaz\nfoo bar\n");
+    });
+
+    test("BRE-style \\| alternation with -n", async () => {
+      vol.writeFileSync("/code.txt", "auth-client\nuseSession\nother\nsignOut\n");
+      const result = await sh`grep -n "auth-client\\|useSession\\|signOut" /code.txt`.text();
+      expect(result).toBe("1:auth-client\n2:useSession\n4:signOut\n");
+    });
+
     test("-e with file positional arg", async () => {
       const result = await sh`grep -e foo /data.txt`.text();
       expect(result).toBe("foo\nfoo bar\n");
