@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.16
+
+### Patch Changes
+
+- add various fixes
+
 ## 0.0.15
 
 ### Patch Changes

@@ -327,4 +327,198 @@ describe("sed command", () => {
       expect(result.stderr.toString()).toContain("usage:");
     });
   });
+
+  // ============================================================
+  // Hold Space Commands (h/H/g/G/x)
+  // ============================================================
+
+  describe("Hold Space Commands", () => {
+    test("h and g: copy pattern to hold, then hold to pattern", async () => {
+      vol.writeFileSync("/hold.txt", "first\nsecond\n");
+      // h saves "first" to hold; on "second" line, g replaces pattern with held value
+      const result = await sh`sed -n -e '/first/h' -e '/second/{ g; p }' /hold.txt`.text();
+      expect(result).toBe("first\n");
+    });
+
+    test("H appends to hold space with newline", async () => {
+      vol.writeFileSync("/hold2.txt", "aaa\nbbb\n");
+      // H on every line: hold="\naaa" then "\naaa\nbbb"
+      // On bbb line, g replaces pattern with hold, then p
+      const result = await sh`sed -n -e 'H' -e '/bbb/{ g; p }' /hold2.txt`.text();
+      expect(result).toBe("\naaa\nbbb\n");
+    });
+
+    test("x exchanges pattern and hold spaces", async () => {
+      // x on every line: first line swaps "" and "alpha" -> outputs ""
+      // second line swaps "alpha" and "beta" -> outputs "alpha"
+      vol.writeFileSync("/xtest.txt", "alpha\nbeta\n");
+      const result = await sh`sed -n -e 'x' -e 'p' /xtest.txt`.text();
+      expect(result).toBe("\nalpha\n");
+    });
+
+    test("h then x to swap", async () => {
+      vol.writeFileSync("/xtest2.txt", "first\nsecond\n");
+      // h on first: hold="first". x on second: swap hold="second", pattern="first"
+      const result = await sh`sed -n -e '/first/h' -e '/second/{ x; p }' /xtest2.txt`.text();
+      expect(result).toBe("first\n");
+    });
+
+    test("G appends hold space to pattern space", async () => {
+      vol.writeFileSync("/gtest.txt", "aaa\nbbb\n");
+      // G on bbb: appends hold (empty) -> "bbb\n"
+      const result = await sh`sed -n '/bbb/{ G; p }' /gtest.txt`.text();
+      expect(result).toBe("bbb\n\n");
+    });
+
+    test("h then G appends saved line", async () => {
+      vol.writeFileSync("/gtest2.txt", "first\nsecond\n");
+      const result = await sh`sed -n -e '/first/h' -e '/second/{ G; p }' /gtest2.txt`.text();
+      expect(result).toBe("second\nfirst\n");
+    });
+  });
+
+  // ============================================================
+  // Address Negation (!)
+  // ============================================================
+
+  describe("Address Negation (!)", () => {
+    test("/pattern/!d deletes non-matching lines", async () => {
+      const result = await sh`sed '/foo/!d' /data.txt`.text();
+      expect(result).toBe("foo bar\n");
+    });
+
+    test("/pattern/!s only substitutes on non-matching lines", async () => {
+      vol.writeFileSync("/neg.txt", "keep\nchange\nkeep\n");
+      const result = await sh`sed '/keep/!s/change/CHANGED/' /neg.txt`.text();
+      expect(result).toBe("keep\nCHANGED\nkeep\n");
+    });
+
+    test("/pattern/!p with -n prints non-matching lines", async () => {
+      const result = await sh`sed -n '/foo/!p' /data.txt`.text();
+      expect(result).toBe("hello world\nbaz qux\n");
+    });
+  });
+
+  // ============================================================
+  // Command Grouping ({ })
+  // ============================================================
+
+  describe("Command Grouping", () => {
+    test("group with substitution and print", async () => {
+      vol.writeFileSync("/grp.txt", "hello\nworld\n");
+      const result = await sh`sed -n '/hello/{ s/hello/HI/; p }' /grp.txt`.text();
+      expect(result).toBe("HI\n");
+    });
+
+    test("group applies only when address matches", async () => {
+      vol.writeFileSync("/grp2.txt", "aaa\nbbb\nccc\n");
+      const result = await sh`sed '/bbb/{ s/bbb/BBB/; }' /grp2.txt`.text();
+      expect(result).toBe("aaa\nBBB\nccc\n");
+    });
+
+    test("negated group", async () => {
+      vol.writeFileSync("/grp3.txt", "keep\nremove\nkeep\n");
+      const result = await sh`sed '/keep/!{ d }' /grp3.txt`.text();
+      expect(result).toBe("keep\nkeep\n");
+    });
+  });
+
+  // ============================================================
+  // Branching (b / :label)
+  // ============================================================
+
+  describe("Branching", () => {
+    test("b with no label skips rest of script", async () => {
+      vol.writeFileSync("/br.txt", "hello\nworld\n");
+      // b skips s/hello/BYE/, so hello stays unchanged
+      const result = await sh`sed -e 'b' -e 's/hello/BYE/' /br.txt`.text();
+      expect(result).toBe("hello\nworld\n");
+    });
+
+    test("conditional branch with address: /pattern/b skips rest for matching lines", async () => {
+      vol.writeFileSync("/br2.txt", "skip\nchange\nskip\n");
+      const result = await sh`sed -e '/skip/b' -e 's/change/CHANGED/' /br2.txt`.text();
+      expect(result).toBe("skip\nCHANGED\nskip\n");
+    });
+
+    test("b label jumps to :label", async () => {
+      vol.writeFileSync("/br3.txt", "test\n");
+      // Jump over the substitution to :end
+      const result = await sh`sed -e 'b end' -e 's/test/FAIL/' -e ':end' /br3.txt`.text();
+      expect(result).toBe("test\n");
+    });
+  });
+
+  // ============================================================
+  // Multi-line Commands (n/N/P/D)
+  // ============================================================
+
+  describe("Multi-line Commands", () => {
+    test("n outputs current line and reads next", async () => {
+      vol.writeFileSync("/ml.txt", "a\nb\nc\n");
+      // n on every line: outputs 'a', reads 'b', then s applies to 'b'
+      const result = await sh`sed -e 'n' -e 's/b/B/' /ml.txt`.text();
+      expect(result).toBe("a\nB\nc\n");
+    });
+
+    test("N appends next line to pattern space", async () => {
+      vol.writeFileSync("/ml2.txt", "hello\nworld\n");
+      const result = await sh`sed -n -e 'N' -e 'p' /ml2.txt`.text();
+      expect(result).toBe("hello\nworld\n");
+    });
+
+    test("P prints up to first newline", async () => {
+      vol.writeFileSync("/ml3.txt", "first\nsecond\n");
+      const result = await sh`sed -n -e 'N' -e 'P' /ml3.txt`.text();
+      expect(result).toBe("first\n");
+    });
+
+    test("D deletes up to first newline and restarts", async () => {
+      vol.writeFileSync("/ml4.txt", "a\nb\nc\n");
+      // N joins: "a\nb", D deletes "a\n" leaving "b", restarts
+      // N joins: "b\nc", D deletes "b\n" leaving "c", restarts
+      // N: no next line, pattern is "c", D: no newline -> delete all
+      const result = await sh`sed 'N; D' /ml4.txt`.text();
+      expect(result).toBe("c\n");
+    });
+  });
+
+  // ============================================================
+  // Combined / Integration
+  // ============================================================
+
+  describe("Combined Advanced Features", () => {
+    test("hold space + negation + grouping + branching", async () => {
+      vol.writeFileSync("/combo.txt", "header\ndata1\ndata2\nfooter\n");
+      // Print only 'data' lines using negation
+      const result = await sh`sed -n '/data/p' /combo.txt`.text();
+      expect(result).toBe("data1\ndata2\n");
+    });
+
+    test("reverse two lines using hold space", async () => {
+      vol.writeFileSync("/rev.txt", "first\nsecond\n");
+      const result = await sh`sed -n -e '/first/h' -e '/second/{ G; p }' /rev.txt`.text();
+      expect(result).toBe("second\nfirst\n");
+    });
+
+    test("skip matching lines with /pattern/b, transform rest", async () => {
+      vol.writeFileSync("/skip.txt", "keep_this\ntransform\nkeep_this\n");
+      const result = await sh`sed -e '/keep/b' -e 's/transform/TRANSFORMED/' /skip.txt`.text();
+      expect(result).toBe("keep_this\nTRANSFORMED\nkeep_this\n");
+    });
+
+    test("standalone group applies to all lines", async () => {
+      vol.writeFileSync("/sgrp.txt", "aaa\nbbb\n");
+      const result = await sh`sed '{ s/aaa/AAA/; s/bbb/BBB/ }' /sgrp.txt`.text();
+      expect(result).toBe("AAA\nBBB\n");
+    });
+
+    test("b label inside group jumps to top-level label", async () => {
+      vol.writeFileSync("/blbl.txt", "match\nother\n");
+      // On "match": group runs b skip, jumping over the substitution to :skip
+      // On "other": no address match, group skipped, substitution runs
+      const result = await sh`sed -e '/match/{ b skip }' -e 's/other/OTHER/' -e ':skip' /blbl.txt`.text();
+      expect(result).toBe("match\nOTHER\n");
+    });
+  });
 });
