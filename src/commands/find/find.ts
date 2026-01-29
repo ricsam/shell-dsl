@@ -66,24 +66,143 @@ function matchGlob(pattern: string, str: string, caseInsensitive = false): boole
   }
 }
 
-interface FindOptions {
-  namePattern?: string;
-  nameIgnoreCase?: boolean;
-  type?: "f" | "d";
-  maxDepth?: number;
-  minDepth?: number;
+// Expression tree types
+type FindExpr =
+  | { type: "name"; pattern: string; ignoreCase: boolean }
+  | { type: "ftype"; value: "f" | "d" }
+  | { type: "and"; left: FindExpr; right: FindExpr }
+  | { type: "or"; left: FindExpr; right: FindExpr }
+  | { type: "not"; expr: FindExpr }
+  | { type: "true" };
+
+function evalExpr(expr: FindExpr, basename: string, isFile: boolean, isDir: boolean): boolean {
+  switch (expr.type) {
+    case "true":
+      return true;
+    case "name":
+      return matchGlob(expr.pattern, basename, expr.ignoreCase);
+    case "ftype":
+      return expr.value === "f" ? isFile : isDir;
+    case "and":
+      return evalExpr(expr.left, basename, isFile, isDir) && evalExpr(expr.right, basename, isFile, isDir);
+    case "or":
+      return evalExpr(expr.left, basename, isFile, isDir) || evalExpr(expr.right, basename, isFile, isDir);
+    case "not":
+      return !evalExpr(expr.expr, basename, isFile, isDir);
+  }
+}
+
+class ParseError extends Error {
+  constructor(msg: string) {
+    super(msg);
+  }
+}
+
+function parseExprArgs(args: string[]): FindExpr {
+  if (args.length === 0) return { type: "true" };
+
+  let pos = 0;
+
+  function peek(): string | undefined {
+    return args[pos];
+  }
+
+  function advance(): string {
+    return args[pos++]!;
+  }
+
+  function parseOr(): FindExpr {
+    let left = parseAnd();
+    while (peek() === "-o") {
+      advance();
+      const right = parseAnd();
+      left = { type: "or", left, right };
+    }
+    return left;
+  }
+
+  function parseAnd(): FindExpr {
+    let left = parseUnary();
+    while (pos < args.length) {
+      const next = peek();
+      if (next === "-o" || next === ")" || next === undefined) break;
+      if (next === "-a") {
+        advance();
+      }
+      const right = parseUnary();
+      left = { type: "and", left, right };
+    }
+    return left;
+  }
+
+  function parseUnary(): FindExpr {
+    const next = peek();
+    if (next === "!" || next === "-not") {
+      advance();
+      const expr = parseUnary();
+      return { type: "not", expr };
+    }
+    return parsePrimary();
+  }
+
+  function parsePrimary(): FindExpr {
+    const tok = peek();
+    if (tok === undefined) {
+      throw new ParseError("find: expected expression");
+    }
+
+    if (tok === "(") {
+      advance();
+      const expr = parseOr();
+      if (peek() !== ")") {
+        throw new ParseError("find: missing closing ')'");
+      }
+      advance();
+      return expr;
+    }
+
+    if (tok === "-name" || tok === "-iname") {
+      advance();
+      const pattern = peek();
+      if (pattern === undefined) {
+        throw new ParseError(`find: missing argument to '${tok}'`);
+      }
+      advance();
+      return { type: "name", pattern, ignoreCase: tok === "-iname" };
+    }
+
+    if (tok === "-type") {
+      advance();
+      const val = peek();
+      if (val === undefined) {
+        throw new ParseError("find: missing argument to '-type'");
+      }
+      if (val !== "f" && val !== "d") {
+        throw new ParseError(`find: Unknown argument to -type: ${val}`);
+      }
+      advance();
+      return { type: "ftype", value: val };
+    }
+
+    throw new ParseError(`find: unknown predicate '${tok}'`);
+  }
+
+  const expr = parseOr();
+  if (pos < args.length) {
+    throw new ParseError(`find: unexpected '${args[pos]}'`);
+  }
+  return expr;
 }
 
 export const find: Command = async (ctx) => {
   const args = [...ctx.args];
   const paths: string[] = [];
-  const options: FindOptions = {};
 
-  // Parse arguments: paths come before first flag, then expressions
+  // Parse arguments: paths come before first flag/operator
   let i = 0;
 
-  // Collect paths (args before first -)
-  while (i < args.length && !args[i]!.startsWith("-")) {
+  // Collect paths (args before first -, !, or ()
+  while (i < args.length && !args[i]!.startsWith("-") && args[i] !== "!" && args[i] !== "(" && args[i] !== ")") {
     paths.push(args[i]!);
     i++;
   }
@@ -93,71 +212,54 @@ export const find: Command = async (ctx) => {
     paths.push(".");
   }
 
-  // Parse expression flags
-  while (i < args.length) {
-    const arg = args[i]!;
+  // Extract global options (-maxdepth, -mindepth) from remaining args
+  let maxDepth: number | undefined;
+  let minDepth: number | undefined;
+  const exprArgs: string[] = [];
 
-    if (arg === "-name") {
-      i++;
-      if (i >= args.length) {
-        await ctx.stderr.writeText("find: missing argument to '-name'\n");
-        return 1;
-      }
-      options.namePattern = args[i]!;
-      options.nameIgnoreCase = false;
-    } else if (arg === "-iname") {
-      i++;
-      if (i >= args.length) {
-        await ctx.stderr.writeText("find: missing argument to '-iname'\n");
-        return 1;
-      }
-      options.namePattern = args[i]!;
-      options.nameIgnoreCase = true;
-    } else if (arg === "-type") {
-      i++;
-      if (i >= args.length) {
-        await ctx.stderr.writeText("find: missing argument to '-type'\n");
-        return 1;
-      }
-      const typeArg = args[i]!;
-      if (typeArg !== "f" && typeArg !== "d") {
-        await ctx.stderr.writeText(`find: Unknown argument to -type: ${typeArg}\n`);
-        return 1;
-      }
-      options.type = typeArg;
-    } else if (arg === "-maxdepth") {
-      i++;
-      if (i >= args.length) {
+  let j = i;
+  while (j < args.length) {
+    const arg = args[j]!;
+    if (arg === "-maxdepth") {
+      j++;
+      if (j >= args.length) {
         await ctx.stderr.writeText("find: missing argument to '-maxdepth'\n");
         return 1;
       }
-      const depth = parseInt(args[i]!, 10);
+      const depth = parseInt(args[j]!, 10);
       if (isNaN(depth) || depth < 0) {
-        await ctx.stderr.writeText(`find: Invalid argument '${args[i]}' to -maxdepth\n`);
+        await ctx.stderr.writeText(`find: Invalid argument '${args[j]}' to -maxdepth\n`);
         return 1;
       }
-      options.maxDepth = depth;
+      maxDepth = depth;
     } else if (arg === "-mindepth") {
-      i++;
-      if (i >= args.length) {
+      j++;
+      if (j >= args.length) {
         await ctx.stderr.writeText("find: missing argument to '-mindepth'\n");
         return 1;
       }
-      const depth = parseInt(args[i]!, 10);
+      const depth = parseInt(args[j]!, 10);
       if (isNaN(depth) || depth < 0) {
-        await ctx.stderr.writeText(`find: Invalid argument '${args[i]}' to -mindepth\n`);
+        await ctx.stderr.writeText(`find: Invalid argument '${args[j]}' to -mindepth\n`);
         return 1;
       }
-      options.minDepth = depth;
-    } else if (arg.startsWith("-")) {
-      await ctx.stderr.writeText(`find: unknown predicate '${arg}'\n`);
-      return 1;
+      minDepth = depth;
     } else {
-      // This shouldn't happen since paths are parsed first, but treat as path
-      paths.push(arg);
+      exprArgs.push(arg);
     }
+    j++;
+  }
 
-    i++;
+  // Parse expression tree
+  let expr: FindExpr;
+  try {
+    expr = parseExprArgs(exprArgs);
+  } catch (e) {
+    if (e instanceof ParseError) {
+      await ctx.stderr.writeText(e.message + "\n");
+      return 1;
+    }
+    throw e;
   }
 
   let hasError = false;
@@ -180,7 +282,7 @@ export const find: Command = async (ctx) => {
     // Recursive traversal function
     async function traverse(path: string, displayPath: string, depth: number): Promise<void> {
       // Check maxdepth
-      if (options.maxDepth !== undefined && depth > options.maxDepth) {
+      if (maxDepth !== undefined && depth > maxDepth) {
         return;
       }
 
@@ -195,25 +297,11 @@ export const find: Command = async (ctx) => {
       const isFile = entryStat.isFile();
       const basename = ctx.fs.basename(path);
 
-      // Check if this entry matches filters
-      let matches = true;
-
-      // Type filter
-      if (options.type === "f" && !isFile) {
-        matches = false;
-      } else if (options.type === "d" && !isDir) {
-        matches = false;
-      }
-
-      // Name filter (only check basename)
-      if (matches && options.namePattern !== undefined) {
-        if (!matchGlob(options.namePattern, basename, options.nameIgnoreCase)) {
-          matches = false;
-        }
-      }
+      // Check if this entry matches the expression
+      const matches = evalExpr(expr, basename, isFile, isDir);
 
       // Output if matches and above mindepth
-      if (matches && (options.minDepth === undefined || depth >= options.minDepth)) {
+      if (matches && (minDepth === undefined || depth >= minDepth)) {
         await ctx.stdout.writeText(displayPath + "\n");
       }
 
@@ -234,28 +322,13 @@ export const find: Command = async (ctx) => {
     }
 
     // Start traversal
-    // For a single file, it's at depth 0
-    // For a directory, the directory itself is depth 0, contents are depth 1+
     if (stat.isFile()) {
-      // Starting from a file - depth 0
-      let matches = true;
+      const basename = ctx.fs.basename(resolvedStart);
+      const matches = evalExpr(expr, basename, true, false);
 
-      if (options.type === "d") {
-        matches = false;
-      }
-
-      if (matches && options.namePattern !== undefined) {
-        const basename = ctx.fs.basename(resolvedStart);
-        if (!matchGlob(options.namePattern, basename, options.nameIgnoreCase)) {
-          matches = false;
-        }
-      }
-
-      if (options.maxDepth !== undefined && options.maxDepth < 0) {
-        matches = false;
-      }
-
-      if (matches && (options.minDepth === undefined || options.minDepth <= 0)) {
+      if (maxDepth !== undefined && maxDepth < 0) {
+        // skip
+      } else if (matches && (minDepth === undefined || minDepth <= 0)) {
         await ctx.stdout.writeText(normalizedPath + "\n");
       }
     } else {

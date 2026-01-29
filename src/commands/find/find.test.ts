@@ -408,6 +408,110 @@ describe("find command", () => {
     });
   });
 
+  describe("-o (OR) operator", () => {
+    test("finds files matching either pattern", async () => {
+      const result = await sh`find /data -name "*.txt" -o -name "*.log"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).toContain("/data/subdir/nested.txt");
+      expect(lines).toContain("/data/subdir/other.log");
+      expect(lines).not.toContain("/data/file3.TXT"); // case sensitive
+    });
+
+    test("finds .ts or .tsx files with grouping", async () => {
+      const result = await sh`find /project -type f \\( -name "*.ts" -o -name "*.tsx" \\)`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/project/src/index.ts");
+      expect(lines).toContain("/project/src/utils/helper.ts");
+      expect(lines).toContain("/project/src/components/Button.tsx");
+      expect(lines).toContain("/project/src/components/Input.tsx");
+      expect(lines).not.toContain("/project/README.md");
+      expect(lines).not.toContain("/project/package.json");
+    });
+
+    test("OR without grouping has lower precedence than AND", async () => {
+      // -name "*.txt" -o -name "*.log" -type f
+      // means: (-name "*.txt") OR ((-name "*.log") AND (-type f))
+      const result = await sh`find /data -name "*.txt" -o -name "*.log" -type f`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/subdir/other.log");
+      // directories matching *.txt should appear since left side of OR has no -type filter
+      // but there are no dirs named *.txt in our test data
+    });
+  });
+
+  describe("grouping with ( )", () => {
+    test("grouping with AND outside", async () => {
+      const result = await sh`find /data \\( -name "*.txt" -o -name "*.log" \\) -type f`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).toContain("/data/subdir/nested.txt");
+      expect(lines).toContain("/data/subdir/other.log");
+      // directories should be excluded
+      expect(lines).not.toContain("/data");
+      expect(lines).not.toContain("/data/subdir");
+    });
+
+    test("nested grouping", async () => {
+      const result = await sh`find /project \\( \\( -name "*.ts" -o -name "*.tsx" \\) -type f \\)`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/project/src/index.ts");
+      expect(lines).toContain("/project/src/components/Button.tsx");
+      expect(lines).not.toContain("/project/README.md");
+    });
+
+    test("unmatched ( returns error", async () => {
+      const result = await sh`find /data \\( -name "*.txt"`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing closing ')'");
+    });
+  });
+
+  describe("! and -not (negation)", () => {
+    test("! negates a predicate", async () => {
+      const result = await sh`find /data -type f ! -name "*.txt"`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file3.TXT");
+      expect(lines).toContain("/data/subdir/other.log");
+      expect(lines).not.toContain("/data/file1.txt");
+      expect(lines).not.toContain("/data/file2.txt");
+      expect(lines).not.toContain("/data/subdir/nested.txt");
+    });
+
+    test("-not negates a predicate", async () => {
+      const result = await sh`find /data -not -type d`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/subdir/other.log");
+      expect(lines).not.toContain("/data");
+      expect(lines).not.toContain("/data/subdir");
+    });
+
+    test("double negation", async () => {
+      const result = await sh`find /data ! ! -type f`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).not.toContain("/data");
+    });
+
+    test("missing operand after ! returns error", async () => {
+      const result = await sh`find /data !`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("expected expression");
+    });
+  });
+
+  describe("-o error cases", () => {
+    test("missing operand after -o returns error", async () => {
+      const result = await sh`find /data -name "*.txt" -o`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("expected expression");
+    });
+  });
+
   test("trailing slash in path does not produce double slashes", async () => {
     const result = await sh`find /data/ -type f`.text();
     const lines = result.trim().split("\n");
