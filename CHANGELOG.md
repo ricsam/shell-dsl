@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.18
+
+### Patch Changes
+
+- fix grep issue
+
 ## 0.0.17
 
 ### Patch Changes

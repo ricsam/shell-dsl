@@ -140,8 +140,33 @@ function buildMatcher(options: GrepOptions): RegExp {
   if (options.fixedStrings) {
     patterns = patterns.map(escapeRegex);
   } else {
-    // Support BRE-style \| \( \) even in ERE mode for compatibility
-    patterns = patterns.map(p => p.replace(/\\\|/g, "|").replace(/\\\(/g, "(").replace(/\\\)/g, ")"));
+    // Convert BRE patterns to ERE/JavaScript RegExp
+    // In BRE: \| \( \) are special; bare ( ) + ? { } are literal
+    // In ERE/JS: | ( ) + ? { } are special; \| \( \) are literal
+    patterns = patterns.map(p => {
+      const hasBRE = /\\\||\\\(|\\\)/.test(p);
+      if (!hasBRE) return p;
+      let result = "";
+      for (let i = 0; i < p.length; i++) {
+        if (p[i] === "\\" && i + 1 < p.length) {
+          const next = p[i + 1];
+          if (next === "|" || next === "(" || next === ")") {
+            // BRE special → ERE special (emit unescaped)
+            result += next;
+            i++;
+          } else {
+            result += p[i] + p[i + 1];
+            i++;
+          }
+        } else if ("()+?{}".includes(p[i])) {
+          // Bare metachar is literal in BRE → escape for ERE
+          result += "\\" + p[i];
+        } else {
+          result += p[i];
+        }
+      }
+      return result;
+    });
   }
 
   // Combine multiple patterns with OR

@@ -524,4 +524,30 @@ describe("grep command", () => {
       expect(result.stderr.toString()).toContain("usage:");
     });
   });
+
+  // ============================================================
+  // BRE-to-ERE conversion
+  // ============================================================
+  describe("BRE-to-ERE conversion", () => {
+    beforeEach(() => {
+      vol.fromJSON({
+        "/code.txt": "formatCurrency(amount)\nformat(cents)\ncents / 100\nother line\n",
+      });
+    });
+
+    test("BRE alternation with literal parens", async () => {
+      const result = await sh`grep "formatCurrency\\|format(cents\\|cents / 100" /code.txt`.text();
+      expect(result).toBe("formatCurrency(amount)\nformat(cents)\ncents / 100\n");
+    });
+
+    test("BRE alternation without parens still works", async () => {
+      const result = await sh`grep "foo\\|bar" /data.txt`.text();
+      expect(result).toBe("foo\nbar\nfoo bar\n");
+    });
+
+    test("pattern without BRE constructs passes through unchanged", async () => {
+      const result = await sh`grep "foo" /data.txt`.text();
+      expect(result).toBe("foo\nfoo bar\n");
+    });
+  });
 });
