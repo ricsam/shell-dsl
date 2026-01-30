@@ -562,6 +562,7 @@ export class Parser {
   private isWordToken(): boolean {
     const token = this.peek();
     return (
+      Array.isArray(token) ||
       token.type === "word" ||
       token.type === "singleQuote" ||
       token.type === "doubleQuote" ||

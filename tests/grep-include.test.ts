@@ -45,4 +45,17 @@ describe("grep --include/--exclude", () => {
     expect(result).not.toContain("style.css");
     expect(result).toContain("app.ts");
   });
+
+  test('--include="*.ts" with equals-quoted syntax works', async () => {
+    const result = await sh`grep -r hello /src --include="*.ts"`.text();
+    expect(result).toContain("app.ts");
+    expect(result).not.toContain("app.js");
+    expect(result).not.toContain("style.css");
+  });
+
+  test('--exclude="*.css" with equals-quoted syntax works', async () => {
+    const result = await sh`grep -r hello /src --exclude="*.css"`.text();
+    expect(result).not.toContain("style.css");
+    expect(result).toContain("app.ts");
+  });
 });

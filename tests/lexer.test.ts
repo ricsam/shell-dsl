@@ -165,4 +165,47 @@ describe("Lexer", () => {
       { type: "eof" },
     ]);
   });
+
+  describe("adjacent token merging", () => {
+    test('--flag="value" produces merged token', () => {
+      const tokens = lex('--include="*.tsx"');
+      // Should be a single merged (array) token, not two separate tokens
+      expect(tokens.length).toBe(2); // merged token + eof
+      expect(Array.isArray(tokens[0])).toBe(true);
+      const parts = tokens[0] as unknown as any[];
+      expect(parts[0]).toEqual({ type: "word", value: "--include=" });
+      expect(parts[1]).toEqual({ type: "doubleQuote", parts: ["*.tsx"] });
+    });
+
+    test("word'quoted' merges into single token", () => {
+      const tokens = lex("hello'world'");
+      expect(tokens.length).toBe(2); // merged + eof
+      expect(Array.isArray(tokens[0])).toBe(true);
+    });
+
+    test('"part1"\'part2\' merges into single token', () => {
+      const tokens = lex(`"part1"'part2'`);
+      expect(tokens.length).toBe(2);
+      expect(Array.isArray(tokens[0])).toBe(true);
+    });
+
+    test("separate tokens stay separate with whitespace", () => {
+      const tokens = lex('--include "*.tsx"');
+      expect(tokens.length).toBe(3); // word, doubleQuote, eof
+      expect(tokens[0]).toEqual({ type: "word", value: "--include" });
+    });
+
+    test("word$VAR merges into single token", () => {
+      const tokens = lex("prefix$VAR");
+      expect(tokens.length).toBe(2);
+      expect(Array.isArray(tokens[0])).toBe(true);
+    });
+
+    test("three adjacent parts merge", () => {
+      const tokens = lex(`"a"'b'"c"`);
+      expect(tokens.length).toBe(2);
+      const parts = tokens[0] as unknown as any[];
+      expect(parts.length).toBe(3);
+    });
+  });
 });

@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.17
+
+### Patch Changes
+
+- update grep
+
 ## 0.0.16
 
 ### Patch Changes

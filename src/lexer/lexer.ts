@@ -34,6 +34,18 @@ export class Lexer {
     this.preserveNewlines = options?.preserveNewlines ?? false;
   }
 
+  private isWordLikeToken(token: Token): boolean {
+    return (
+      token.type === "word" ||
+      token.type === "singleQuote" ||
+      token.type === "doubleQuote" ||
+      token.type === "variable" ||
+      token.type === "substitution" ||
+      token.type === "arithmetic" ||
+      token.type === "glob"
+    );
+  }
+
   tokenize(): Token[] {
     const tokens: Token[] = [];
 
@@ -44,12 +56,25 @@ export class Lexer {
         continue;
       }
 
+      const posBeforeWhitespace = this.pos;
       this.skipWhitespaceExceptNewlines();
+      const hadWhitespace = this.pos > posBeforeWhitespace;
       if (this.isAtEnd()) break;
 
       const token = this.nextToken();
       if (token) {
-        tokens.push(token);
+        // Merge adjacent word-like tokens (no whitespace between them)
+        const prev = tokens[tokens.length - 1];
+        if (!hadWhitespace && prev && this.isWordLikeToken(token) && (Array.isArray(prev) || this.isWordLikeToken(prev))) {
+          // Merge into an array token (concat)
+          if (Array.isArray(prev)) {
+            (prev as Token[]).push(token);
+          } else {
+            tokens[tokens.length - 1] = [prev, token] as unknown as Token;
+          }
+        } else {
+          tokens.push(token);
+        }
       }
     }
 
