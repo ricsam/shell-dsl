@@ -148,21 +148,22 @@ function buildMatcher(options: GrepOptions): RegExp {
       if (!hasBRE) return p;
       let result = "";
       for (let i = 0; i < p.length; i++) {
-        if (p[i] === "\\" && i + 1 < p.length) {
-          const next = p[i + 1];
+        const ch = p[i]!;
+        if (ch === "\\" && i + 1 < p.length) {
+          const next = p[i + 1]!;
           if (next === "|" || next === "(" || next === ")") {
             // BRE special → ERE special (emit unescaped)
             result += next;
             i++;
           } else {
-            result += p[i] + p[i + 1];
+            result += ch + next;
             i++;
           }
-        } else if ("()+?{}".includes(p[i])) {
+        } else if ("()+?{}".includes(ch)) {
           // Bare metachar is literal in BRE → escape for ERE
-          result += "\\" + p[i];
+          result += "\\" + ch;
         } else {
-          result += p[i];
+          result += ch;
         }
       }
       return result;
