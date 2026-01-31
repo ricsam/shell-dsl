@@ -29,8 +29,12 @@ function parseSubstitution(script: string): SedCommand | null {
   const patternStr = rawPattern!.replace(/\\\(/g, "(").replace(/\\\)/g, ")");
   const replacement = rawReplacement!
     .replace(/\\([0-9])/g, "\x00BACKREF$1\x00")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\\\/g, "\x00BSLASH\x00")
     .replace(/\$/g, "$$$$")
-    .replace(/\x00BACKREF([0-9])\x00/g, "$$$1");
+    .replace(/\x00BACKREF([0-9])\x00/g, "$$$1")
+    .replace(/\x00BSLASH\x00/g, "\\");
 
   try {
     const regexFlags = caseInsensitive ? "i" : "";

@@ -521,4 +521,24 @@ describe("sed command", () => {
       expect(result).toBe("match\nOTHER\n");
     });
   });
+
+  describe("escape sequences in replacement", () => {
+    test("\\n in replacement inserts newline", async () => {
+      vol.writeFileSync("/esc.txt", "foo\n");
+      const result = await sh`sed 's/foo/bar\\nbaz/' /esc.txt`.text();
+      expect(result).toBe("bar\nbaz\n");
+    });
+
+    test("\\t in replacement inserts tab", async () => {
+      vol.writeFileSync("/esc.txt", "foo\n");
+      const result = await sh`sed 's/foo/bar\\tbaz/' /esc.txt`.text();
+      expect(result).toBe("bar\tbaz\n");
+    });
+
+    test("\\\\ in replacement inserts literal backslash", async () => {
+      vol.writeFileSync("/esc.txt", "foo\n");
+      const result = await sh`sed 's/foo/bar\\\\baz/' /esc.txt`.text();
+      expect(result).toBe("bar\\baz\n");
+    });
+  });
 });
