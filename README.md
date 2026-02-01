@@ -430,6 +430,61 @@ const upper: Command = async (ctx) => {
 await sh`echo "hello" | upper`.text();  // "HELLO\n"
 ```
 
+### Error Handling in Custom Commands
+
+Report errors by writing to `ctx.stderr` and returning a non-zero exit code. The shell wraps non-zero exits in a `ShellError` (unless `.nothrow()` is used):
+
+```ts
+const divide: Command = async (ctx) => {
+  const a = Number(ctx.args[0]);
+  const b = Number(ctx.args[1]);
+  if (isNaN(a) || isNaN(b)) {
+    await ctx.stderr.writeText("divide: arguments must be numbers\n");
+    return 1;
+  }
+  if (b === 0) {
+    await ctx.stderr.writeText("divide: division by zero\n");
+    return 1;
+  }
+  await ctx.stdout.writeText(String(a / b) + "\n");
+  return 0;
+};
+
+// ShellError is thrown on non-zero exit
+try {
+  await sh`divide 1 0`.text();
+} catch (err) {
+  err.exitCode;                  // 1
+  err.stderr.toString();         // "divide: division by zero\n"
+}
+
+// Suppress with nothrow
+const { exitCode } = await sh`divide 1 0`.nothrow();
+```
+
+### Common Patterns
+
+**Dual-mode input (stdin vs files):** Many commands read from stdin when no file arguments are given, or from files otherwise. See the `cat` and `grep` examples above.
+
+**Resolving paths:** Always resolve relative paths against `ctx.cwd`:
+
+```ts
+const path = ctx.fs.resolve(ctx.cwd, ctx.args[0]);
+const content = await ctx.fs.readFile(path);
+```
+
+**Accessing environment variables:**
+
+```ts
+const home = ctx.env["HOME"] ?? "/";
+```
+
+### Common Pitfalls
+
+- **Always register commands in the `commands` object.** Don't try to match command names with regex on raw input — registered commands work correctly in pipelines, `&&`/`||` chains, redirections, and subshells.
+- **Always return an exit code.** Forgetting `return 0` leaves the exit code undefined.
+- **Don't forget trailing newlines.** Most shell tools expect lines terminated with `\n`. Use `writeText(value + "\n")` rather than `writeText(value)`.
+
 ## Built-in Commands
 
 Import all built-in commands:

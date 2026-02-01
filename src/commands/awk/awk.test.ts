@@ -254,6 +254,24 @@ describe("awk command", () => {
     });
   });
 
+  describe("Escape sequences", () => {
+    test("-F '\\t' splits on tab characters", async () => {
+      vol.writeFileSync("/tsv.txt", "col1\tcol2\tcol3\n");
+      const result = await sh`awk -F '\\t' '{print $2}' /tsv.txt`.text();
+      expect(result).toBe("col2\n");
+    });
+
+    test("string literal with \\n produces newline", async () => {
+      const result = await sh`echo "test" | awk '{print "hello\\nworld"}'`.text();
+      expect(result).toBe("hello\nworld\n");
+    });
+
+    test("string literal with \\t produces tab", async () => {
+      const result = await sh`echo "test" | awk '{print "col1\\tcol2"}'`.text();
+      expect(result).toBe("col1\tcol2\n");
+    });
+  });
+
   describe("Invalid Flags", () => {
     test("invalid short flag returns error with usage", async () => {
       const result = await sh`awk -x '{print}' /data.txt`.nothrow();

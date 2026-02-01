@@ -1,4 +1,5 @@
 import type { Command } from "../../types.ts";
+import { expandEscapes } from "../../utils/expand-escapes.ts";
 
 interface AwkRule {
   pattern?: RegExp;
@@ -135,6 +136,9 @@ function parseArgs(args: string[]): ParseArgsResult {
             error: { type: "missing_value", option: "-F" },
           };
         }
+
+        // Expand escape sequences (e.g. \t → tab)
+        fs = expandEscapes(fs);
 
         // For single character separators, match exactly
         // For patterns, use as regex
@@ -303,7 +307,7 @@ function evaluateExpression(
     // String literal
     if ((token.startsWith('"') && token.endsWith('"')) ||
         (token.startsWith("'") && token.endsWith("'"))) {
-      parts.push(token.slice(1, -1));
+      parts.push(expandEscapes(token.slice(1, -1)));
     }
     // Field reference $0, $1, etc.
     else if (token.match(/^\$(\d+)$/)) {

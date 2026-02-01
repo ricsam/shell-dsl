@@ -71,6 +71,28 @@ describe("echo command", () => {
     });
   });
 
+  describe("-e flag (escape sequences)", () => {
+    test("-e interprets backslash-n as newline", async () => {
+      const result = await sh`echo -e "hello\\nworld"`.text();
+      expect(result).toBe("hello\nworld\n");
+    });
+
+    test("-e interprets backslash-t as tab", async () => {
+      const result = await sh`echo -e "col1\\tcol2"`.text();
+      expect(result).toBe("col1\tcol2\n");
+    });
+
+    test("-e interprets double backslash as single backslash", async () => {
+      const result = await sh`echo -e 'back\\\\slash'`.text();
+      expect(result).toBe("back\\slash\n");
+    });
+
+    test("without -e, backslash sequences are literal", async () => {
+      const result = await sh`echo 'hello\\nworld'`.text();
+      expect(result).toBe("hello\\nworld\n");
+    });
+  });
+
   describe("Invalid Flags", () => {
     test("invalid short flag returns error with usage", async () => {
       const result = await sh`echo -x hello`.nothrow();

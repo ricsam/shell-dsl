@@ -134,7 +134,8 @@ function escapeRegex(str: string): string {
 }
 
 function buildMatcher(options: GrepOptions): RegExp {
-  let patterns = options.patterns;
+  // Expand common escape sequences in patterns (\t → tab, \n → newline)
+  let patterns = options.patterns.map(p => p.replace(/\\t/g, "\t").replace(/\\n/g, "\n"));
 
   // If fixed strings mode, escape regex metacharacters
   if (options.fixedStrings) {

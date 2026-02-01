@@ -609,6 +609,167 @@ describe("README Examples", () => {
     });
   });
 
+  describe("Error Handling in Custom Commands", () => {
+    test("divide command reports errors via stderr and non-zero exit", async () => {
+      const divide: Command = async (ctx) => {
+        const a = Number(ctx.args[0]);
+        const b = Number(ctx.args[1]);
+        if (isNaN(a) || isNaN(b)) {
+          await ctx.stderr.writeText("divide: arguments must be numbers\n");
+          return 1;
+        }
+        if (b === 0) {
+          await ctx.stderr.writeText("divide: division by zero\n");
+          return 1;
+        }
+        await ctx.stdout.writeText(String(a / b) + "\n");
+        return 0;
+      };
+
+      const vol = new Volume();
+      const sh = createShellDSL({
+        fs: createVirtualFS(createFsFromVolume(vol)),
+        cwd: "/",
+        env: {},
+        commands: { ...builtinCommands, divide },
+      });
+
+      // Successful division
+      const result = await sh`divide 10 2`.text();
+      expect(result).toBe("5\n");
+
+      // Division by zero throws ShellError
+      try {
+        await sh`divide 1 0`.text();
+        expect(true).toBe(false);
+      } catch (err) {
+        expect(err).toBeInstanceOf(ShellError);
+        if (err instanceof ShellError) {
+          expect(err.exitCode).toBe(1);
+          expect(err.stderr.toString()).toBe("divide: division by zero\n");
+        }
+      }
+
+      // Invalid args
+      try {
+        await sh`divide foo bar`.text();
+        expect(true).toBe(false);
+      } catch (err) {
+        expect(err).toBeInstanceOf(ShellError);
+        if (err instanceof ShellError) {
+          expect(err.exitCode).toBe(1);
+          expect(err.stderr.toString()).toBe("divide: arguments must be numbers\n");
+        }
+      }
+
+      // nothrow suppresses ShellError
+      const nothrowResult = await sh`divide 1 0`.nothrow();
+      expect(nothrowResult.exitCode).toBe(1);
+    });
+
+    test("custom command works in && / || chains", async () => {
+      const check: Command = async (ctx) => {
+        if (ctx.args[0] === "ok") return 0;
+        await ctx.stderr.writeText("check failed\n");
+        return 1;
+      };
+
+      const vol = new Volume();
+      const sh = createShellDSL({
+        fs: createVirtualFS(createFsFromVolume(vol)),
+        cwd: "/",
+        env: {},
+        commands: { ...builtinCommands, check },
+      });
+
+      const r1 = await sh`check ok && echo success`.text();
+      expect(r1).toBe("success\n");
+
+      const r2 = await sh`check fail || echo fallback`.text();
+      expect(r2).toBe("fallback\n");
+    });
+
+    test("custom command works in pipelines", async () => {
+      const upper: Command = async (ctx) => {
+        const text = await ctx.stdin.text();
+        await ctx.stdout.writeText(text.toUpperCase());
+        return 0;
+      };
+
+      const vol = new Volume();
+      const sh = createShellDSL({
+        fs: createVirtualFS(createFsFromVolume(vol)),
+        cwd: "/",
+        env: {},
+        commands: { ...builtinCommands, upper },
+      });
+
+      const result = await sh`echo "hello world" | upper`.text();
+      expect(result).toBe("HELLO WORLD\n");
+    });
+  });
+
+  describe("Common Patterns", () => {
+    test("resolving relative paths with ctx.cwd", async () => {
+      const readFile: Command = async (ctx) => {
+        const path = ctx.fs.resolve(ctx.cwd, ctx.args[0]!);
+        const content = await ctx.fs.readFile(path);
+        await ctx.stdout.write(new Uint8Array(content));
+        return 0;
+      };
+
+      const vol = new Volume();
+      vol.fromJSON({ "/sub/data.txt": "resolved" });
+      const sh = createShellDSL({
+        fs: createVirtualFS(createFsFromVolume(vol)),
+        cwd: "/sub",
+        env: {},
+        commands: { ...builtinCommands, readFile },
+      });
+
+      const result = await sh`readFile data.txt`.text();
+      expect(result).toBe("resolved");
+    });
+
+    test("accessing environment variables via ctx.env", async () => {
+      const showHome: Command = async (ctx) => {
+        const home = ctx.env["HOME"] ?? "/";
+        await ctx.stdout.writeText(home + "\n");
+        return 0;
+      };
+
+      const vol = new Volume();
+      const sh = createShellDSL({
+        fs: createVirtualFS(createFsFromVolume(vol)),
+        cwd: "/",
+        env: { HOME: "/home/alice" },
+        commands: { showHome },
+      });
+
+      const result = await sh`showHome`.text();
+      expect(result).toBe("/home/alice\n");
+    });
+
+    test("ctx.env falls back to default when variable missing", async () => {
+      const showHome: Command = async (ctx) => {
+        const home = ctx.env["HOME"] ?? "/";
+        await ctx.stdout.writeText(home + "\n");
+        return 0;
+      };
+
+      const vol = new Volume();
+      const sh = createShellDSL({
+        fs: createVirtualFS(createFsFromVolume(vol)),
+        cwd: "/",
+        env: {},
+        commands: { showHome },
+      });
+
+      const result = await sh`showHome`.text();
+      expect(result).toBe("/\n");
+    });
+  });
+
   describe("Built-in Commands", () => {
     let vol: InstanceType<typeof Volume>;
     let sh: ReturnType<typeof createShellDSL>;

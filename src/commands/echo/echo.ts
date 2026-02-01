@@ -1,23 +1,27 @@
 import type { Command } from "../../types.ts";
 import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+import { expandEscapes } from "../../utils/expand-escapes.ts";
 
 interface EchoFlags {
   noNewline: boolean;
+  interpretEscapes: boolean;
 }
 
 const spec = {
   name: "echo",
   flags: [
     { short: "n" },
+    { short: "e" },
   ] as FlagDefinition[],
-  usage: "echo [-n] [string ...]",
+  usage: "echo [-neE] [string ...]",
   stopAfterFirstPositional: true,
 };
 
-const defaults: EchoFlags = { noNewline: false };
+const defaults: EchoFlags = { noNewline: false, interpretEscapes: false };
 
 const handler = (flags: EchoFlags, flag: FlagDefinition) => {
   if (flag.short === "n") flags.noNewline = true;
+  if (flag.short === "e") flags.interpretEscapes = true;
 };
 
 const parser = createFlagParser(spec, defaults, handler);
@@ -31,6 +35,10 @@ export const echo: Command = async (ctx) => {
   }
 
   let output = result.args.join(" ");
+
+  if (result.flags.interpretEscapes) {
+    output = expandEscapes(output);
+  }
 
   if (!result.flags.noNewline) {
     output += "\n";

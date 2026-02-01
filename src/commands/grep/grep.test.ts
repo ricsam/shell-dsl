@@ -509,6 +509,14 @@ describe("grep command", () => {
     });
   });
 
+  describe("Escape sequences in patterns", () => {
+    test("\\t matches tab characters", async () => {
+      vol.writeFileSync("/tabs.txt", "col1\tcol2\ncol1 col2\n");
+      const result = await sh`grep '\\t' /tabs.txt`.text();
+      expect(result).toBe("col1\tcol2\n");
+    });
+  });
+
   describe("Invalid Flags", () => {
     test("invalid short flag returns error with usage", async () => {
       const result = await sh`grep -z foo /data.txt`.nothrow();

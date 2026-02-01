@@ -1,4 +1,5 @@
 export { escape, escapeForInterpolation } from "./escape.ts";
+export { expandEscapes } from "./expand-escapes.ts";
 export {
   createFlagParser,
   type FlagDefinition,
