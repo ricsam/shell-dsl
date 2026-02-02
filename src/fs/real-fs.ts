@@ -65,7 +65,7 @@ export class FileSystem implements VirtualFS {
     return score;
   }
 
-  protected getPermission(virtualPath: string): Permission {
+  public getPermission(virtualPath: string): Permission {
     const normalized = virtualPath.replace(/^\/+/, ""); // strip leading slashes
 
     for (const rule of this.rules) {
@@ -89,7 +89,7 @@ export class FileSystem implements VirtualFS {
     return new RegExp(`^${regex}$`).test(filePath);
   }
 
-  protected checkPermission(virtualPath: string, operation: "read" | "write"): void {
+  public checkPermission(virtualPath: string, operation: "read" | "write"): void {
     const perm = this.getPermission(virtualPath);
 
     if (perm === "excluded") {

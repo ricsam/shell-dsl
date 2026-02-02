@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.20
+
+### Patch Changes
+
+- make some of the FileSystem methods public
+
 ## 0.0.19
 
 ### Patch Changes
