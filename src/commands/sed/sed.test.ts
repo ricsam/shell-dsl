@@ -159,6 +159,96 @@ describe("sed command", () => {
   });
 
   // ============================================================
+  // Numeric Line Addresses
+  // ============================================================
+
+  describe("Numeric Line Addresses", () => {
+    test("single line number with print", async () => {
+      const result = await sh`sed -n '2p' /lines.txt`.text();
+      expect(result).toBe("line2\n");
+    });
+
+    test("single line number with delete", async () => {
+      const result = await sh`sed '2d' /lines.txt`.text();
+      expect(result).toBe("line1\nline3\nline4\n");
+    });
+
+    test("single line number with substitution", async () => {
+      const result = await sh`sed '2s/line/LINE/' /lines.txt`.text();
+      expect(result).toBe("line1\nLINE2\nline3\nline4\n");
+    });
+
+    test("line range with print", async () => {
+      const result = await sh`sed -n '2,3p' /lines.txt`.text();
+      expect(result).toBe("line2\nline3\n");
+    });
+
+    test("line range with delete", async () => {
+      const result = await sh`sed '2,3d' /lines.txt`.text();
+      expect(result).toBe("line1\nline4\n");
+    });
+
+    test("line range with substitution", async () => {
+      const result = await sh`sed '2,3s/line/LINE/' /lines.txt`.text();
+      expect(result).toBe("line1\nLINE2\nLINE3\nline4\n");
+    });
+
+    test("$ matches last line", async () => {
+      const result = await sh`sed -n '$p' /lines.txt`.text();
+      expect(result).toBe("line4\n");
+    });
+
+    test("range from line to end", async () => {
+      const result = await sh`sed -n '3,$p' /lines.txt`.text();
+      expect(result).toBe("line3\nline4\n");
+    });
+
+    test("range from start to line", async () => {
+      const result = await sh`sed -n '1,2p' /lines.txt`.text();
+      expect(result).toBe("line1\nline2\n");
+    });
+
+    test("large line range (550,560p)", async () => {
+      // Create a file with 600 lines
+      let content = "";
+      for (let i = 1; i <= 600; i++) {
+        content += `line${i}\n`;
+      }
+      vol.writeFileSync("/bigfile.txt", content);
+      const result = await sh`sed -n '550,560p' /bigfile.txt`.text();
+      const lines = result.trim().split("\n");
+      expect(lines.length).toBe(11); // 550 through 560 inclusive
+      expect(lines[0]).toBe("line550");
+      expect(lines[10]).toBe("line560");
+    });
+
+    test("mixed regex and numeric address", async () => {
+      const result = await sh`sed -n '/line2/,3p' /lines.txt`.text();
+      expect(result).toBe("line2\nline3\n");
+    });
+
+    test("numeric to regex range", async () => {
+      const result = await sh`sed -n '2,/line4/p' /lines.txt`.text();
+      expect(result).toBe("line2\nline3\nline4\n");
+    });
+
+    test("line number that exceeds file length", async () => {
+      const result = await sh`sed -n '100p' /lines.txt`.text();
+      expect(result).toBe("");
+    });
+
+    test("negated line number", async () => {
+      const result = await sh`sed '2!d' /lines.txt`.text();
+      expect(result).toBe("line2\n");
+    });
+
+    test("negated line range", async () => {
+      const result = await sh`sed '2,3!d' /lines.txt`.text();
+      expect(result).toBe("line2\nline3\n");
+    });
+  });
+
+  // ============================================================
   // Pipeline Integration
   // ============================================================
 

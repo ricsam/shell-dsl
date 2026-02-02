@@ -1,8 +1,15 @@
 import type { Command } from "../../types.ts";
 
+interface SedAddress {
+  type: "line" | "regex" | "last";
+  lineNumber?: number;
+  pattern?: RegExp;
+}
+
 interface SedCommand {
   type: "s" | "d" | "p" | "h" | "H" | "g_hold" | "G" | "x" | "n" | "N" | "P" | "D" | "b" | "label" | "group";
-  addressPattern?: RegExp;
+  address1?: SedAddress;
+  address2?: SedAddress;
   negated?: boolean;
   pattern?: RegExp;
   replacement?: string;
@@ -50,6 +57,82 @@ function parseSubstitution(script: string): SedCommand | null {
   }
 }
 
+function parseAddress(str: string): { address: SedAddress; remaining: string } | null {
+  // Match $ (last line)
+  if (str.startsWith("$")) {
+    return { address: { type: "last" }, remaining: str.slice(1) };
+  }
+  // Match line number
+  const lineMatch = str.match(/^(\d+)/);
+  if (lineMatch) {
+    return {
+      address: { type: "line", lineNumber: parseInt(lineMatch[1]!, 10) },
+      remaining: str.slice(lineMatch[0].length),
+    };
+  }
+  // Match regex /pattern/
+  // Handle escaped slashes in pattern
+  let i = 1; // start after opening /
+  if (!str.startsWith("/")) return null;
+
+  let pattern = "";
+  while (i < str.length) {
+    if (str[i] === "\\") {
+      // Escape sequence
+      if (i + 1 < str.length) {
+        pattern += str[i]! + str[i + 1]!;
+        i += 2;
+      } else {
+        break;
+      }
+    } else if (str[i] === "/") {
+      // End of pattern
+      try {
+        return {
+          address: { type: "regex", pattern: new RegExp(pattern) },
+          remaining: str.slice(i + 1),
+        };
+      } catch {
+        return null;
+      }
+    } else {
+      pattern += str[i];
+      i++;
+    }
+  }
+  return null;
+}
+
+function parseAddressRange(script: string): { address1?: SedAddress; address2?: SedAddress; remaining: string; negated: boolean } {
+  let trimmed = script.trim();
+
+  // Try to parse first address
+  const first = parseAddress(trimmed);
+  if (!first) {
+    return { remaining: trimmed, negated: false };
+  }
+
+  trimmed = first.remaining;
+  const address1 = first.address;
+
+  // Check for comma (range)
+  if (trimmed.startsWith(",")) {
+    const second = parseAddress(trimmed.slice(1));
+    if (second) {
+      let remaining = second.remaining;
+      const negated = remaining.startsWith("!");
+      if (negated) remaining = remaining.slice(1);
+      return { address1, address2: second.address, remaining: remaining.trim(), negated };
+    }
+  }
+
+  // Check for negation
+  const negated = trimmed.startsWith("!");
+  if (negated) trimmed = trimmed.slice(1);
+
+  return { address1, remaining: trimmed.trim(), negated };
+}
+
 function parseCommand(script: string): SedCommand | null {
   const trimmed = script.trim();
 
@@ -58,33 +141,6 @@ function parseCommand(script: string): SedCommand | null {
     return {
       type: "label",
       label: trimmed.slice(1).trim(),
-      globalFlag: false,
-      printFlag: false,
-    };
-  }
-
-  // Branch command: b or b label
-  if (trimmed === "b" || trimmed.startsWith("b ") || trimmed.startsWith("b\t")) {
-    return {
-      type: "b",
-      label: trimmed.length > 1 ? trimmed.slice(1).trim() : undefined,
-      globalFlag: false,
-      printFlag: false,
-    };
-  }
-
-  // Group { ... }
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    const inner = trimmed.slice(1, -1).trim();
-    const parts = splitScriptParts(inner);
-    const children: SedCommand[] = [];
-    for (const part of parts) {
-      const cmd = parseCommand(part);
-      if (cmd) children.push(cmd);
-    }
-    return {
-      type: "group",
-      children,
       globalFlag: false,
       printFlag: false,
     };
@@ -104,6 +160,35 @@ function parseCommand(script: string): SedCommand | null {
     d: "d",
     p: "p",
   };
+
+  // Branch command: b or b label (no address)
+  if (trimmed === "b" || trimmed.startsWith("b ") || trimmed.startsWith("b\t")) {
+    return {
+      type: "b",
+      label: trimmed.length > 1 ? trimmed.slice(1).trim() : undefined,
+      globalFlag: false,
+      printFlag: false,
+    };
+  }
+
+  // Group { ... } (no address)
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    const inner = trimmed.slice(1, -1).trim();
+    const parts = splitScriptParts(inner);
+    const children: SedCommand[] = [];
+    for (const part of parts) {
+      const cmd = parseCommand(part);
+      if (cmd) children.push(cmd);
+    }
+    return {
+      type: "group",
+      children,
+      globalFlag: false,
+      printFlag: false,
+    };
+  }
+
+  // Simple command without address
   if (simpleCommands[trimmed]) {
     return {
       type: simpleCommands[trimmed]!,
@@ -112,70 +197,67 @@ function parseCommand(script: string): SedCommand | null {
     };
   }
 
-  // Check for address pattern: /pattern/ followed by optional ! and command
-  const addressWithCmd = trimmed.match(/^\/(.+?)\/(!)?\s*(.*)$/);
-  if (addressWithCmd) {
-    const [, addressPatternStr, negation, rest] = addressWithCmd;
-    const negated = negation === "!";
-    const restTrimmed = rest!.trim();
+  // Try to parse address(es) followed by command
+  const { address1, address2, remaining, negated } = parseAddressRange(trimmed);
 
-    try {
-      const addressPattern = new RegExp(addressPatternStr!);
+  if (address1) {
+    const restTrimmed = remaining.trim();
 
-      // /pattern/ alone — not valid, but handle gracefully
-      if (!restTrimmed) return null;
+    // Address alone — not valid, but handle gracefully
+    if (!restTrimmed) return null;
 
-      // /pattern/[!]d or /pattern/[!]p etc (simple commands)
-      if (simpleCommands[restTrimmed]) {
-        return {
-          type: simpleCommands[restTrimmed]!,
-          addressPattern,
-          negated,
-          globalFlag: false,
-          printFlag: false,
-        };
+    // [address][!]d or [address][!]p etc (simple commands)
+    if (simpleCommands[restTrimmed]) {
+      return {
+        type: simpleCommands[restTrimmed]!,
+        address1,
+        address2,
+        negated,
+        globalFlag: false,
+        printFlag: false,
+      };
+    }
+
+    // [address][!]b or [address][!]b label
+    if (restTrimmed === "b" || restTrimmed.startsWith("b ")) {
+      return {
+        type: "b",
+        address1,
+        address2,
+        negated,
+        label: restTrimmed.length > 1 ? restTrimmed.slice(1).trim() : undefined,
+        globalFlag: false,
+        printFlag: false,
+      };
+    }
+
+    // [address][!]{ ... }
+    if (restTrimmed.startsWith("{") && restTrimmed.endsWith("}")) {
+      const inner = restTrimmed.slice(1, -1).trim();
+      const parts = splitScriptParts(inner);
+      const children: SedCommand[] = [];
+      for (const part of parts) {
+        const cmd = parseCommand(part);
+        if (cmd) children.push(cmd);
       }
+      return {
+        type: "group",
+        address1,
+        address2,
+        negated,
+        children,
+        globalFlag: false,
+        printFlag: false,
+      };
+    }
 
-      // /pattern/[!]b or /pattern/[!]b label
-      if (restTrimmed === "b" || restTrimmed.startsWith("b ")) {
-        return {
-          type: "b",
-          addressPattern,
-          negated,
-          label: restTrimmed.length > 1 ? restTrimmed.slice(1).trim() : undefined,
-          globalFlag: false,
-          printFlag: false,
-        };
-      }
-
-      // /pattern/[!]{ ... }
-      if (restTrimmed.startsWith("{") && restTrimmed.endsWith("}")) {
-        const inner = restTrimmed.slice(1, -1).trim();
-        const parts = splitScriptParts(inner);
-        const children: SedCommand[] = [];
-        for (const part of parts) {
-          const cmd = parseCommand(part);
-          if (cmd) children.push(cmd);
-        }
-        return {
-          type: "group",
-          addressPattern,
-          negated,
-          children,
-          globalFlag: false,
-          printFlag: false,
-        };
-      }
-
-      // /pattern/[!]s/old/new/flags
-      const subCmd = parseSubstitution(restTrimmed);
-      if (subCmd) {
-        subCmd.addressPattern = addressPattern;
-        subCmd.negated = negated;
-        return subCmd;
-      }
-    } catch {
-      return null;
+    // [address][!]s/old/new/flags
+    const subCmd = parseSubstitution(restTrimmed);
+    if (subCmd) {
+      subCmd.address1 = address1;
+      subCmd.address2 = address2;
+      subCmd.negated = negated;
+      return subCmd;
     }
   }
 
@@ -369,13 +451,53 @@ interface SedState {
   output: string[];
   deleted: boolean;
   restart: boolean; // for D command
+  rangeState: Map<SedCommand, boolean>; // tracks active ranges
+}
+
+function singleAddressMatches(address: SedAddress, state: SedState): boolean {
+  const lineNum = state.lineIndex + 1; // 1-based line numbers
+  switch (address.type) {
+    case "line":
+      return lineNum === address.lineNumber;
+    case "last":
+      return state.lineIndex === state.lines.length - 1;
+    case "regex":
+      return address.pattern!.test(state.patternSpace);
+    default:
+      return false;
+  }
 }
 
 function addressMatches(cmd: SedCommand, state: SedState): boolean {
-  if (!cmd.addressPattern) {
+  // No address - matches all
+  if (!cmd.address1) {
     return cmd.negated ? false : true;
   }
-  const matches = cmd.addressPattern.test(state.patternSpace);
+
+  // Range address (addr1,addr2)
+  if (cmd.address2) {
+    const isInRange = state.rangeState.get(cmd) ?? false;
+
+    if (!isInRange) {
+      // Not in range yet - check if we should start
+      if (singleAddressMatches(cmd.address1, state)) {
+        state.rangeState.set(cmd, true);
+        const matches = true;
+        return cmd.negated ? !matches : matches;
+      }
+      return cmd.negated ? true : false;
+    } else {
+      // In range - check if we should end
+      if (singleAddressMatches(cmd.address2, state)) {
+        state.rangeState.set(cmd, false);
+      }
+      const matches = true;
+      return cmd.negated ? !matches : matches;
+    }
+  }
+
+  // Single address
+  const matches = singleAddressMatches(cmd.address1, state);
   return cmd.negated ? !matches : matches;
 }
 
@@ -561,6 +683,7 @@ export const sed: Command = async (ctx) => {
       output: [],
       deleted: false,
       restart: false,
+      rangeState: new Map(),
     };
 
     while (state.lineIndex < lines.length) {

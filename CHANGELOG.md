@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.21
+
+### Patch Changes
+
+- improve sed
+
 ## 0.0.20
 
 ### Patch Changes
