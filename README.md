@@ -496,7 +496,7 @@ import { builtinCommands } from "shell-dsl/commands";
 Or import individually:
 
 ```ts
-import { echo, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk } from "shell-dsl/commands";
+import { echo, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk, cut } from "shell-dsl/commands";
 ```
 
 | Command | Description |
@@ -521,6 +521,7 @@ import { echo, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk } from "s
 | `find` | Search for files (`-name`, `-iname`, `-type f\|d`, `-maxdepth`, `-mindepth`) |
 | `sed` | Stream editor (`s///`, `d`, `p`, `-n`, `-e`) |
 | `awk` | Pattern scanning (`{print $1}`, `-F`, `NF`, `NR`) |
+| `cut` | Select fields/characters (`-f`, `-d`, `-c`, `-b`, `-s`, `--complement`) |
 | `test` / `[` | File and string tests (`-f`, `-d`, `-e`, `-z`, `-n`, `=`, `!=`) |
 | `true` | Exit with code 0 |
 | `false` | Exit with code 1 |

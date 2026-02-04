@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.22
+
+### Patch Changes
+
+- add cut
+
 ## 0.0.21
 
 ### Patch Changes
