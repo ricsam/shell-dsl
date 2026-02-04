@@ -279,6 +279,52 @@ await sh`echo $API_KEY`.text();  // "secret\n"
 sh.resetEnv();  // Restore initial environment
 ```
 
+## TTY Detection
+
+Commands can check `ctx.stdout.isTTY` to vary their output format depending on whether they're writing to a terminal or a pipe/file, just like real shell commands do (e.g. `ls` uses columnar output on a terminal but one-per-line when piped).
+
+Enable TTY mode via the `isTTY` config option (default `false`):
+
+```ts
+const sh = createShellDSL({
+  fs: createVirtualFS(createFsFromVolume(vol)),
+  cwd: "/",
+  env: {},
+  commands: builtinCommands,
+  isTTY: true,
+});
+
+// Standalone command — stdout.isTTY is true
+await sh`ls /dir`.text();             // "file1.txt  file2.txt  subdir\n"
+
+// Piped command — intermediate stdout.isTTY is always false
+await sh`ls /dir | grep file`.text(); // "file1.txt\nfile2.txt\n"
+```
+
+| Context | `stdout.isTTY` |
+|---------|----------------|
+| Standalone command, shell has `isTTY: true` | `true` |
+| Intermediate command in pipeline | `false` |
+| Output redirected to file (`> file`) | `false` |
+| Command substitution (`$(cmd)`) | `false` |
+| Shell has `isTTY: false` (default) | `false` |
+
+### Using isTTY in Custom Commands
+
+```ts
+const myls: Command = async (ctx) => {
+  const entries = await ctx.fs.readdir(ctx.cwd);
+  if (ctx.stdout.isTTY) {
+    await ctx.stdout.writeText(entries.join("  ") + "\n");
+  } else {
+    for (const entry of entries) {
+      await ctx.stdout.writeText(entry + "\n");
+    }
+  }
+  return 0;
+};
+```
+
 ## Glob Expansion
 
 Globs are expanded by the interpreter before command execution:
@@ -356,6 +402,7 @@ interface Stdin {
 interface Stdout {
   write(chunk: Uint8Array): Promise<void>;  // Write bytes
   writeText(str: string): Promise<void>;    // Write UTF-8 string
+  isTTY: boolean;                           // Whether output is a terminal
 }
 ```
 
@@ -510,7 +557,7 @@ import { echo, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk, cut } fr
 | `sort` | Sort lines (`-r` reverse, `-n` numeric) |
 | `uniq` | Remove duplicate adjacent lines (`-c` count) |
 | `pwd` | Print working directory |
-| `ls` | List directory contents |
+| `ls` | List directory contents (TTY-aware: space-separated on TTY, one-per-line when piped) |
 | `mkdir` | Create directories (`-p` parents) |
 | `rm` | Remove files/directories (`-r` recursive, `-f` force) |
 | `cp` | Copy files/directories (`-r` recursive, `-n` no-clobber) |

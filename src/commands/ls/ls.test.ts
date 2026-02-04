@@ -176,4 +176,58 @@ describe("ls command", () => {
     expect(result).toContain("/deep/a/b:");
     expect(result).toContain("bottom.txt");
   });
+
+  test("default (non-TTY) outputs one entry per line", async () => {
+    const result = await sh`ls /dir`.text();
+    const lines = result.trim().split("\n");
+    expect(lines).toContain("file1.txt");
+    expect(lines).toContain("file2.txt");
+    expect(lines).toContain("subdir");
+    // Each entry should be on its own line
+    expect(lines.length).toBe(3);
+  });
+
+  test("isTTY: true outputs space-separated", async () => {
+    const memfs = createFsFromVolume(vol);
+    const fs = createVirtualFS(memfs);
+    const ttysh = createShellDSL({
+      fs,
+      cwd: "/",
+      env: {},
+      commands: builtinCommands,
+      isTTY: true,
+    });
+
+    const result = await ttysh`ls /dir`.text();
+    // Space-separated on one line
+    expect(result.trim().split("\n").length).toBe(1);
+    expect(result).toContain("file1.txt");
+    expect(result).toContain("file2.txt");
+  });
+
+  test("isTTY: true piped still outputs one-per-line (pipe forces isTTY=false)", async () => {
+    const memfs = createFsFromVolume(vol);
+    const fs = createVirtualFS(memfs);
+    const ttysh = createShellDSL({
+      fs,
+      cwd: "/",
+      env: {},
+      commands: builtinCommands,
+      isTTY: true,
+    });
+
+    const result = await ttysh`ls /dir | grep file`.text();
+    const lines = result.trim().split("\n");
+    expect(lines).toContain("file1.txt");
+    expect(lines).toContain("file2.txt");
+    expect(lines.length).toBe(2);
+  });
+
+  test("ls | grep pipeline returns matching entries", async () => {
+    const result = await sh`ls /dir | grep file`.text();
+    const lines = result.trim().split("\n");
+    expect(lines).toContain("file1.txt");
+    expect(lines).toContain("file2.txt");
+    expect(lines).not.toContain("subdir");
+  });
 });

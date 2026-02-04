@@ -21,6 +21,7 @@ export class ShellDSL {
   private currentEnv: Record<string, string>;
   private commands: Record<string, Command>;
   private shouldThrow: boolean = true;
+  private isTTY: boolean;
 
   constructor(config: ShellConfig) {
     this.fs = config.fs;
@@ -29,6 +30,7 @@ export class ShellDSL {
     this.currentCwd = config.cwd;
     this.currentEnv = { ...config.env };
     this.commands = config.commands;
+    this.isTTY = config.isTTY ?? false;
   }
 
   // Template tag function
@@ -100,6 +102,7 @@ export class ShellDSL {
           env,
           commands: shell.commands,
           redirectObjects: options?.redirectObjects,
+          isTTY: shell.isTTY,
         });
 
         const tokens = shell.lex(source);
@@ -161,6 +164,7 @@ export class ShellDSL {
       cwd: this.currentCwd,
       env: this.currentEnv,
       commands: this.commands,
+      isTTY: this.isTTY,
     });
 
     return interpreter.execute(program.ast);
@@ -186,6 +190,7 @@ export function createShellDSL(config: ShellConfig): ShellDSL & ((strings: Templ
     currentEnv: (shell as any).currentEnv,
     commands: (shell as any).commands,
     shouldThrow: (shell as any).shouldThrow,
+    isTTY: (shell as any).isTTY,
   });
 
   // Bind methods

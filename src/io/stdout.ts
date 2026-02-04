@@ -6,6 +6,11 @@ export class OutputCollectorImpl implements OutputCollector {
   private closeResolvers: Array<() => void> = [];
   private resolveWait: (() => void) | null = null;
   private waitPromise: Promise<void> | null = null;
+  public isTTY: boolean;
+
+  constructor(isTTY: boolean = false) {
+    this.isTTY = isTTY;
+  }
 
   async write(chunk: Uint8Array): Promise<void> {
     if (this.closed) {
@@ -76,6 +81,7 @@ export class PipeBuffer implements OutputCollector, Stdout {
   private closed: boolean = false;
   private waitingReaders: Array<() => void> = [];
   private readIndex: number = 0;
+  public readonly isTTY: boolean = false;
 
   async write(chunk: Uint8Array): Promise<void> {
     if (this.closed) {
@@ -132,12 +138,12 @@ export class PipeBuffer implements OutputCollector, Stdout {
   }
 }
 
-export function createStdout(): OutputCollector {
-  return new OutputCollectorImpl();
+export function createStdout(isTTY: boolean = false): OutputCollector {
+  return new OutputCollectorImpl(isTTY);
 }
 
-export function createStderr(): OutputCollector {
-  return new OutputCollectorImpl();
+export function createStderr(isTTY: boolean = false): OutputCollector {
+  return new OutputCollectorImpl(isTTY);
 }
 
 export function createPipe(): PipeBuffer {
@@ -149,6 +155,7 @@ export class BufferTargetCollector implements OutputCollector {
   private offset: number = 0;
   private closed: boolean = false;
   private closeResolvers: Array<() => void> = [];
+  public readonly isTTY: boolean = false;
 
   constructor(target: Buffer) {
     this.target = target;

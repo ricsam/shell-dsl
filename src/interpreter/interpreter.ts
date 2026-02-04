@@ -12,6 +12,7 @@ export interface InterpreterOptions {
   env: Record<string, string>;
   commands: Record<string, Command>;
   redirectObjects?: RedirectObjectMap;
+  isTTY?: boolean;
 }
 
 // Loop control flow exceptions
@@ -34,6 +35,7 @@ export class Interpreter {
   private commands: Record<string, Command>;
   private redirectObjects: RedirectObjectMap;
   private loopDepth: number = 0;
+  private isTTY: boolean;
 
   constructor(options: InterpreterOptions) {
     this.fs = options.fs;
@@ -41,6 +43,7 @@ export class Interpreter {
     this.env = { ...options.env };
     this.commands = options.commands;
     this.redirectObjects = options.redirectObjects ?? {};
+    this.isTTY = options.isTTY ?? false;
   }
 
   getLoopDepth(): number {
@@ -48,8 +51,8 @@ export class Interpreter {
   }
 
   async execute(ast: ASTNode): Promise<ExecResult> {
-    const stdout = createStdout();
-    const stderr = createStderr();
+    const stdout = createStdout(this.isTTY);
+    const stderr = createStderr(this.isTTY);
 
     const exitCode = await this.executeNode(ast, null, stdout, stderr);
 

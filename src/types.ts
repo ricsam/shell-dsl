@@ -48,11 +48,13 @@ export interface Stdin {
 export interface Stdout {
   write(chunk: Uint8Array): Promise<void>;
   writeText(str: string): Promise<void>;
+  isTTY: boolean;
 }
 
 export interface Stderr {
   write(chunk: Uint8Array): Promise<void>;
   writeText(str: string): Promise<void>;
+  isTTY: boolean;
 }
 
 export interface OutputCollector extends Stdout {
@@ -74,6 +76,7 @@ export interface ShellConfig {
   cwd: string;
   env: Record<string, string>;
   commands: Record<string, Command>;
+  isTTY?: boolean;
 }
 
 // Raw escape hatch type

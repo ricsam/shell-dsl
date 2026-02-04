@@ -72,7 +72,7 @@ export const ls: Command = async (ctx) => {
           await ctx.stdout.writeText(`?????????? ${entry}\n`);
         }
       }
-    } else if (onePerLine) {
+    } else if (onePerLine || !ctx.stdout.isTTY) {
       for (const entry of entries) {
         await ctx.stdout.writeText(entry + "\n");
       }

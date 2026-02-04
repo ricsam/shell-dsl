@@ -1,4 +1,5 @@
 import { ParseError } from "../errors.ts";
+import { Lexer } from "../lexer/lexer.ts";
 import type { Token, KeywordValue } from "../lexer/tokens.ts";
 import type { ASTNode, Redirect, RedirectMode, CommandNode, IfNode, ForNode, WhileNode, UntilNode, CaseNode, CaseClause } from "./ast.ts";
 
@@ -434,7 +435,7 @@ export class Parser {
       case "substitution":
         // Parse the inner command
         const innerParser = new Parser(
-          new (require("../lexer/lexer.ts").Lexer)(token.command, { preserveNewlines: true }).tokenize()
+          new Lexer(token.command, { preserveNewlines: true }).tokenize()
         );
         return { type: "substitution", command: innerParser.parse() };
       case "arithmetic":
