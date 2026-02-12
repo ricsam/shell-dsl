@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.25
+
+### Patch Changes
+
+- better readFile
+
 ## 0.0.24
 
 ### Patch Changes

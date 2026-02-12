@@ -6,11 +6,12 @@ export function createVirtualFS(memfs: IFs): VirtualFS {
   const { promises: fs } = memfs;
 
   return {
-    async readFile(path: string): Promise<Buffer> {
-      if (path === "/dev/null") return Buffer.alloc(0);
+    readFile: (async (path: string, encoding?: BufferEncoding): Promise<Buffer | string> => {
+      if (path === "/dev/null") return encoding ? "" : Buffer.alloc(0);
       const content = await fs.readFile(path);
-      return Buffer.from(content);
-    },
+      const buf = Buffer.from(content);
+      return encoding ? buf.toString(encoding) : buf;
+    }) as VirtualFS["readFile"],
 
     async readdir(path: string): Promise<string[]> {
       const entries = await fs.readdir(path);

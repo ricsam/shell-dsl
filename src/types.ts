@@ -1,6 +1,7 @@
 // Virtual Filesystem Interface
 export interface VirtualFS {
   readFile(path: string): Promise<Buffer>;
+  readFile(path: string, encoding: BufferEncoding): Promise<string>;
   readdir(path: string): Promise<string[]>;
   stat(path: string): Promise<FileStat>;
   exists(path: string): Promise<boolean>;

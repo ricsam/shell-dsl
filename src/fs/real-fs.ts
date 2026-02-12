@@ -133,11 +133,14 @@ export class FileSystem implements VirtualFS {
   }
 
   // Read operations
-  async readFile(filePath: string): Promise<Buffer> {
+  async readFile(filePath: string): Promise<Buffer>;
+  async readFile(filePath: string, encoding: BufferEncoding): Promise<string>;
+  async readFile(filePath: string, encoding?: BufferEncoding): Promise<Buffer | string> {
     this.checkPermission(filePath, "read");
     const realPath = this.resolveSafePath(filePath);
     const content = await this.underlyingFs.promises.readFile(realPath);
-    return Buffer.from(content);
+    const buf = Buffer.from(content);
+    return encoding ? buf.toString(encoding) : buf;
   }
 
   async readdir(dirPath: string): Promise<string[]> {
