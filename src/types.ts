@@ -36,6 +36,7 @@ export interface CommandContext {
   cwd: string;
   env: Record<string, string>;
   setCwd: (path: string) => void;
+  exec?: (name: string, args: string[]) => Promise<ExecResult>;
 }
 
 export interface Stdin {

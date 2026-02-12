@@ -184,6 +184,49 @@ export class Interpreter {
       return 127;
     }
 
+    // Create exec closure for sub-command invocation
+    const exec = async (cmdName: string, cmdArgs: string[]) => {
+      const cmd = this.commands[cmdName];
+      if (!cmd) {
+        return {
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.from(`${cmdName}: command not found\n`),
+          exitCode: 127,
+        };
+      }
+      const subStdout = createStdout();
+      const subStderr = createStderr();
+      const subCtx = createCommandContext({
+        args: cmdArgs,
+        stdin: createStdin(null),
+        stdout: subStdout,
+        stderr: subStderr,
+        fs: this.fs,
+        cwd: this.cwd,
+        env: { ...localEnv },
+        setCwd: (path: string) => this.setCwd(path),
+        exec,
+      });
+      let exitCode: number;
+      try {
+        exitCode = await cmd(subCtx);
+      } catch (err) {
+        if (err instanceof BreakException || err instanceof ContinueException) {
+          throw err;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        await subStderr.writeText(`${cmdName}: ${message}\n`);
+        exitCode = 1;
+      }
+      subStdout.close();
+      subStderr.close();
+      return {
+        stdout: await subStdout.collect(),
+        stderr: await subStderr.collect(),
+        exitCode,
+      };
+    };
+
     // Create context and execute
     const ctx = createCommandContext({
       args,
@@ -194,6 +237,7 @@ export class Interpreter {
       cwd: this.cwd,
       env: localEnv,
       setCwd: (path: string) => this.setCwd(path),
+      exec,
     });
 
     let exitCode: number;

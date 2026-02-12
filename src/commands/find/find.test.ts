@@ -518,4 +518,142 @@ describe("find command", () => {
     expect(lines).toContain("/data/file1.txt");
     expect(lines).not.toContain("/data//file1.txt");
   });
+
+  describe("-exec (per-file mode)", () => {
+    test("-exec cmd {} \\; runs once per match with {} replaced", async () => {
+      const result = await sh`find /data -maxdepth 1 -name "*.txt" -exec echo found {} \\;`.text();
+      const lines = result.trim().split("\n").sort();
+      expect(lines).toContain("found /data/file1.txt");
+      expect(lines).toContain("found /data/file2.txt");
+    });
+
+    test("-exec suppresses default path printing", async () => {
+      const result = await sh`find /data -maxdepth 1 -name "*.txt" -exec echo {} \\;`.text();
+      const lines = result.trim().split("\n").sort();
+      // Should only have echo output, not duplicated bare paths
+      expect(lines).toEqual(["/data/file1.txt", "/data/file2.txt"]);
+    });
+
+    test("-exec acts as filter (true on exit 0)", async () => {
+      // Use grep (returns 0 if match found, 1 if not)
+      // file1.txt contains "data1", file2.txt contains "data2"
+      // Only file1.txt matches "data1" - -exec grep returns true only for it
+      const result = await sh`find /data -maxdepth 1 -name "*.txt" -exec grep data1 {} \\;`.nothrow();
+      const stdout = result.stdout.toString();
+      expect(stdout).toContain("data1");
+      // find itself should succeed (no traversal errors)
+      expect(result.exitCode).toBe(0);
+    });
+
+    test("-exec false \\; filters out everything", async () => {
+      const result = await sh`find /data -maxdepth 1 -type f -exec false {} \\;`.text();
+      // false always returns 1, so -exec evaluates to false for all files
+      // With -exec suppressing default print and all results filtered, output should be empty
+      expect(result.trim()).toBe("");
+    });
+
+    test("-exec combined with -name", async () => {
+      const result = await sh`find /data -name "*.txt" -exec echo hit {} \\;`.text();
+      const lines = result.trim().split("\n").sort();
+      expect(lines).toContain("hit /data/file1.txt");
+      expect(lines).toContain("hit /data/file2.txt");
+      expect(lines).toContain("hit /data/subdir/nested.txt");
+      // Should not include .TXT (case sensitive)
+      expect(lines).not.toContain("hit /data/file3.TXT");
+    });
+
+    test("-exec combined with -type", async () => {
+      const result = await sh`find /data -type d -exec echo dir {} \\;`.text();
+      const lines = result.trim().split("\n").sort();
+      expect(lines).toContain("dir /data");
+      expect(lines).toContain("dir /data/subdir");
+      expect(lines.length).toBe(2);
+    });
+
+    test("-exec combined with -o", async () => {
+      const result = await sh`find /data -maxdepth 1 \\( -name "*.txt" -o -name "*.TXT" \\) -exec echo {} \\;`.text();
+      const lines = result.trim().split("\n").sort();
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).toContain("/data/file3.TXT");
+    });
+
+    test("-exec with ! (negation)", async () => {
+      const result = await sh`find /data -maxdepth 1 -type f ! -name "*.txt" -exec echo {} \\;`.text();
+      const lines = result.trim().split("\n").sort();
+      expect(lines).toContain("/data/file3.TXT");
+      expect(lines).not.toContain("/data/file1.txt");
+    });
+
+    test("-exec can modify filesystem (rm)", async () => {
+      // Verify file exists first
+      const before = await sh`find /data -name "file1.txt"`.text();
+      expect(before.trim()).toContain("/data/file1.txt");
+
+      // Remove it via -exec
+      await sh`find /data -name "file1.txt" -exec rm {} \\;`;
+
+      // Verify it's gone
+      const after = await sh`find /data -name "file1.txt"`.text();
+      expect(after.trim()).toBe("");
+    });
+
+    test("non-existent command in -exec returns false", async () => {
+      const result = await sh`find /data -maxdepth 1 -name "file1.txt" -exec nonexistent {} \\;`.nothrow();
+      // The command doesn't exist, so -exec returns false, suppresses print
+      expect(result.stdout.toString().trim()).toBe("");
+      expect(result.stderr.toString()).toContain("command not found");
+    });
+  });
+
+  describe("-exec (batch mode with +)", () => {
+    test("-exec cmd {} + batches all matches into one invocation", async () => {
+      const result = await sh`find /data -maxdepth 1 -name "*.txt" -exec echo {} +`.text();
+      const output = result.trim();
+      // All paths should be in a single line (one echo invocation)
+      expect(output.split("\n").length).toBe(1);
+      expect(output).toContain("/data/file1.txt");
+      expect(output).toContain("/data/file2.txt");
+    });
+
+    test("-exec cmd {} + with -type f", async () => {
+      const result = await sh`find /data -type f -exec echo {} +`.text();
+      const output = result.trim();
+      // Single invocation with all file paths
+      expect(output.split("\n").length).toBe(1);
+      expect(output).toContain("/data/file1.txt");
+      expect(output).toContain("/data/file2.txt");
+      expect(output).toContain("/data/file3.TXT");
+      expect(output).toContain("/data/subdir/nested.txt");
+      expect(output).toContain("/data/subdir/other.log");
+    });
+
+    test("-exec cmd with extra args {} + puts paths where {} is", async () => {
+      const result = await sh`find /data -maxdepth 1 -name "*.txt" -exec echo prefix {} +`.text();
+      const output = result.trim();
+      expect(output).toMatch(/^prefix /);
+      expect(output).toContain("/data/file1.txt");
+      expect(output).toContain("/data/file2.txt");
+    });
+  });
+
+  describe("-exec error cases", () => {
+    test("missing terminator returns error", async () => {
+      const result = await sh`find /data -exec echo {}`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing terminator");
+    });
+
+    test("missing command returns error", async () => {
+      const result = await sh`find /data -exec ;`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing command");
+    });
+
+    test("-exec + with missing command returns error", async () => {
+      const result = await sh`find /data -exec +`.nothrow();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("missing command");
+    });
+  });
 });

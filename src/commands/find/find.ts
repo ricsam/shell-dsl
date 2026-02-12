@@ -1,4 +1,4 @@
-import type { Command } from "../../types.ts";
+import type { Command, CommandContext, ExecResult } from "../../types.ts";
 
 /**
  * Simple glob pattern matching (fnmatch-style)
@@ -73,9 +73,17 @@ type FindExpr =
   | { type: "and"; left: FindExpr; right: FindExpr }
   | { type: "or"; left: FindExpr; right: FindExpr }
   | { type: "not"; expr: FindExpr }
-  | { type: "true" };
+  | { type: "true" }
+  | { type: "exec"; cmdName: string; cmdArgs: string[]; batchMode: boolean };
 
-function evalExpr(expr: FindExpr, basename: string, isFile: boolean, isDir: boolean): boolean {
+async function evalExpr(
+  expr: FindExpr,
+  basename: string,
+  isFile: boolean,
+  isDir: boolean,
+  entryPath: string,
+  ctx: CommandContext,
+): Promise<boolean> {
   switch (expr.type) {
     case "true":
       return true;
@@ -83,12 +91,69 @@ function evalExpr(expr: FindExpr, basename: string, isFile: boolean, isDir: bool
       return matchGlob(expr.pattern, basename, expr.ignoreCase);
     case "ftype":
       return expr.value === "f" ? isFile : isDir;
-    case "and":
-      return evalExpr(expr.left, basename, isFile, isDir) && evalExpr(expr.right, basename, isFile, isDir);
-    case "or":
-      return evalExpr(expr.left, basename, isFile, isDir) || evalExpr(expr.right, basename, isFile, isDir);
+    case "and": {
+      const leftResult = await evalExpr(expr.left, basename, isFile, isDir, entryPath, ctx);
+      if (!leftResult) return false;
+      return evalExpr(expr.right, basename, isFile, isDir, entryPath, ctx);
+    }
+    case "or": {
+      const leftResult = await evalExpr(expr.left, basename, isFile, isDir, entryPath, ctx);
+      if (leftResult) return true;
+      return evalExpr(expr.right, basename, isFile, isDir, entryPath, ctx);
+    }
     case "not":
-      return !evalExpr(expr.expr, basename, isFile, isDir);
+      return !(await evalExpr(expr.expr, basename, isFile, isDir, entryPath, ctx));
+    case "exec": {
+      if (expr.batchMode) {
+        // In batch mode, always return true during traversal; paths are collected externally
+        return true;
+      }
+      // Per-file mode: execute command with {} replaced by entryPath
+      if (!ctx.exec) {
+        await ctx.stderr.writeText("find: -exec not supported (no exec capability)\n");
+        return false;
+      }
+      const resolvedArgs = expr.cmdArgs.map(a => a === "{}" ? entryPath : a);
+      const result: ExecResult = await ctx.exec(expr.cmdName, resolvedArgs);
+      // Pass stdout/stderr through to find's streams
+      if (result.stdout.length > 0) {
+        await ctx.stdout.write(result.stdout);
+      }
+      if (result.stderr.length > 0) {
+        await ctx.stderr.write(result.stderr);
+      }
+      return result.exitCode === 0;
+    }
+  }
+}
+
+/** Check if expression tree contains any -exec node */
+function hasActionExpr(expr: FindExpr): boolean {
+  switch (expr.type) {
+    case "exec":
+      return true;
+    case "and":
+    case "or":
+      return hasActionExpr(expr.left) || hasActionExpr(expr.right);
+    case "not":
+      return hasActionExpr(expr.expr);
+    default:
+      return false;
+  }
+}
+
+/** Collect all batch-mode -exec nodes from the expression tree */
+function collectBatchExecNodes(expr: FindExpr): Array<{ type: "exec"; cmdName: string; cmdArgs: string[]; batchMode: boolean }> {
+  switch (expr.type) {
+    case "exec":
+      return expr.batchMode ? [expr] : [];
+    case "and":
+    case "or":
+      return [...collectBatchExecNodes(expr.left), ...collectBatchExecNodes(expr.right)];
+    case "not":
+      return collectBatchExecNodes(expr.expr);
+    default:
+      return [];
   }
 }
 
@@ -184,6 +249,42 @@ function parseExprArgs(args: string[]): FindExpr {
       return { type: "ftype", value: val };
     }
 
+    if (tok === "-exec") {
+      advance();
+      const cmdName = peek();
+      if (cmdName === undefined || cmdName === ";" || cmdName === "+") {
+        throw new ParseError("find: -exec: missing command");
+      }
+      advance();
+
+      const cmdArgs: string[] = [];
+      let batchMode = false;
+      let foundTerminator = false;
+
+      while (pos < args.length) {
+        const a = args[pos]!;
+        if (a === ";") {
+          advance();
+          foundTerminator = true;
+          break;
+        }
+        if (a === "+") {
+          advance();
+          batchMode = true;
+          foundTerminator = true;
+          break;
+        }
+        cmdArgs.push(a);
+        advance();
+      }
+
+      if (!foundTerminator) {
+        throw new ParseError("find: -exec: missing terminator (';' or '+')");
+      }
+
+      return { type: "exec", cmdName, cmdArgs, batchMode };
+    }
+
     throw new ParseError(`find: unknown predicate '${tok}'`);
   }
 
@@ -262,6 +363,10 @@ export const find: Command = async (ctx) => {
     throw e;
   }
 
+  const hasAction = hasActionExpr(expr);
+  const batchExecNodes = collectBatchExecNodes(expr);
+  const batchPaths: string[] = [];
+
   let hasError = false;
 
   // Process each starting path
@@ -298,11 +403,16 @@ export const find: Command = async (ctx) => {
       const basename = ctx.fs.basename(path);
 
       // Check if this entry matches the expression
-      const matches = evalExpr(expr, basename, isFile, isDir);
+      const matches = await evalExpr(expr, basename, isFile, isDir, displayPath, ctx);
 
-      // Output if matches and above mindepth
       if (matches && (minDepth === undefined || depth >= minDepth)) {
-        await ctx.stdout.writeText(displayPath + "\n");
+        if (batchExecNodes.length > 0) {
+          batchPaths.push(displayPath);
+        } else if (!hasAction) {
+          // No action expressions: default print behavior
+          await ctx.stdout.writeText(displayPath + "\n");
+        }
+        // If has per-file -exec actions, output was already handled in evalExpr
       }
 
       // Recurse into directories
@@ -324,15 +434,41 @@ export const find: Command = async (ctx) => {
     // Start traversal
     if (stat.isFile()) {
       const basename = ctx.fs.basename(resolvedStart);
-      const matches = evalExpr(expr, basename, true, false);
+      const matches = await evalExpr(expr, basename, true, false, normalizedPath, ctx);
 
       if (maxDepth !== undefined && maxDepth < 0) {
         // skip
       } else if (matches && (minDepth === undefined || minDepth <= 0)) {
-        await ctx.stdout.writeText(normalizedPath + "\n");
+        if (batchExecNodes.length > 0) {
+          batchPaths.push(normalizedPath);
+        } else if (!hasAction) {
+          await ctx.stdout.writeText(normalizedPath + "\n");
+        }
       }
     } else {
       await traverse(resolvedStart, normalizedPath, 0);
+    }
+  }
+
+  // Execute batch -exec nodes with all collected paths
+  if (batchExecNodes.length > 0 && batchPaths.length > 0 && ctx.exec) {
+    for (const node of batchExecNodes) {
+      // Replace {} in cmdArgs with all paths
+      const resolvedArgs: string[] = [];
+      for (const a of node.cmdArgs) {
+        if (a === "{}") {
+          resolvedArgs.push(...batchPaths);
+        } else {
+          resolvedArgs.push(a);
+        }
+      }
+      const result = await ctx.exec(node.cmdName, resolvedArgs);
+      if (result.stdout.length > 0) {
+        await ctx.stdout.write(result.stdout);
+      }
+      if (result.stderr.length > 0) {
+        await ctx.stderr.write(result.stderr);
+      }
     }
   }
 

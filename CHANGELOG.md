@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.24
+
+### Patch Changes
+
+- add -exec to find
+
 ## 0.0.23
 
 ### Patch Changes
