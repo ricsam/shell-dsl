@@ -230,4 +230,92 @@ describe("ls command", () => {
     expect(lines).toContain("file2.txt");
     expect(lines).not.toContain("subdir");
   });
+
+  describe("-h flag (human-readable sizes)", () => {
+    test("-lh shows human-readable sizes", async () => {
+      vol.writeFileSync("/dir/big.bin", Buffer.alloc(2048));
+      const result = await sh`ls -lh /dir`.text();
+      expect(result).toContain("2.0K");
+    });
+
+    test("-lh formats bytes (< 1024) as raw number", async () => {
+      // file1.txt has "content1" = 8 bytes
+      const result = await sh`ls -lh /dir`.text();
+      expect(result).toMatch(/\s+8\s/);
+    });
+
+    test("-lh formats kilobytes", async () => {
+      vol.writeFileSync("/dir/medium.bin", Buffer.alloc(15 * 1024));
+      const result = await sh`ls -lh /dir`.text();
+      expect(result).toContain("15K");
+    });
+
+    test("-lh formats megabytes", async () => {
+      vol.writeFileSync("/dir/large.bin", Buffer.alloc(5 * 1024 * 1024));
+      const result = await sh`ls -lh /dir`.text();
+      expect(result).toContain("5.0M");
+    });
+
+    test("-lah combined works", async () => {
+      vol.writeFileSync("/dir/big.bin", Buffer.alloc(2048));
+      const result = await sh`ls -lah /dir`.text();
+      expect(result).toContain(".hidden");
+      expect(result).toContain("2.0K");
+      expect(result).toMatch(/[-d]rwx/);
+    });
+
+    test("-h without -l is silently ignored", async () => {
+      const result = await sh`ls -h /dir`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("file1.txt");
+      // Should not contain size info
+      expect(result).not.toMatch(/rwx/);
+    });
+  });
+
+  describe("TTY color support", () => {
+    let ttysh: ReturnType<typeof createShellDSL>;
+
+    beforeEach(() => {
+      const memfs = createFsFromVolume(vol);
+      const fs = createVirtualFS(memfs);
+      ttysh = createShellDSL({
+        fs,
+        cwd: "/",
+        env: {},
+        commands: builtinCommands,
+        isTTY: true,
+      });
+    });
+
+    test("TTY mode colorizes directories in long format", async () => {
+      const result = await ttysh`ls -l /dir`.text();
+      // subdir should be wrapped in bold blue
+      expect(result).toContain("\x1b[1;34msubdir\x1b[0m");
+      // regular files should not have color
+      expect(result).not.toContain("\x1b[1;34mfile1.txt");
+    });
+
+    test("TTY mode colorizes directories in default (space-separated) format", async () => {
+      const result = await ttysh`ls /dir`.text();
+      expect(result).toContain("\x1b[1;34msubdir\x1b[0m");
+      expect(result).not.toContain("\x1b[1;34mfile1.txt");
+    });
+
+    test("TTY mode with -1 still colorizes directories", async () => {
+      const result = await ttysh`ls -1 /dir`.text();
+      expect(result).toContain("\x1b[1;34msubdir\x1b[0m");
+      expect(result).not.toContain("\x1b[1;34mfile1.txt");
+    });
+
+    test("non-TTY mode has no ANSI escape codes", async () => {
+      const result = await sh`ls /dir`.text();
+      expect(result).not.toContain("\x1b[");
+    });
+
+    test("piped output has no ANSI escape codes even with TTY shell", async () => {
+      const result = await ttysh`ls /dir | cat`.text();
+      expect(result).not.toContain("\x1b[");
+    });
+  });
 });

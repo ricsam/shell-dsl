@@ -6,6 +6,7 @@ interface LsFlags {
   long: boolean;
   onePerLine: boolean;
   recursive: boolean;
+  humanReadable: boolean;
 }
 
 const spec = {
@@ -13,22 +14,46 @@ const spec = {
   flags: [
     { short: "a", long: "all" },
     { short: "l" },
+    { short: "h" },
     { short: "1" },
     { short: "R" },
   ] as FlagDefinition[],
-  usage: "ls [-alR1] [file ...]",
+  usage: "ls [-alhR1] [file ...]",
 };
 
-const defaults: LsFlags = { all: false, long: false, onePerLine: false, recursive: false };
+const defaults: LsFlags = { all: false, long: false, onePerLine: false, recursive: false, humanReadable: false };
 
 const handler = (flags: LsFlags, flag: FlagDefinition) => {
   if (flag.short === "a") flags.all = true;
   if (flag.short === "l") flags.long = true;
+  if (flag.short === "h") flags.humanReadable = true;
   if (flag.short === "1") flags.onePerLine = true;
   if (flag.short === "R") flags.recursive = true;
 };
 
 const parser = createFlagParser(spec, defaults, handler);
+
+const BOLD_BLUE = "\x1b[1;34m";
+const RESET = "\x1b[0m";
+
+function formatSize(bytes: number, humanReadable: boolean): string {
+  if (!humanReadable) return String(bytes).padStart(8);
+  if (bytes < 1024) return String(bytes).padStart(8);
+  const units = ["K", "M", "G", "T"];
+  let value = bytes;
+  let unitIndex = -1;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  const formatted = value < 10 ? value.toFixed(1) : String(Math.floor(value));
+  return (formatted + units[unitIndex]!).padStart(8);
+}
+
+function colorize(name: string, isDirectory: boolean, isTTY: boolean): string {
+  if (!isTTY || !isDirectory) return name;
+  return `${BOLD_BLUE}${name}${RESET}`;
+}
 
 export const ls: Command = async (ctx) => {
   const result = parser.parse(ctx.args);
@@ -38,7 +63,8 @@ export const ls: Command = async (ctx) => {
     return 1;
   }
 
-  const { all: showAll, long: longFormat, onePerLine, recursive } = result.flags;
+  const { all: showAll, long: longFormat, onePerLine, recursive, humanReadable } = result.flags;
+  const isTTY = ctx.stdout.isTTY;
   const paths = result.args.length === 0 ? ["."] : result.args;
   let needsBlankLine = false;
 
@@ -63,22 +89,47 @@ export const ls: Command = async (ctx) => {
         const entryPath = ctx.fs.resolve(dirPath, entry);
         try {
           const entryStat = await ctx.fs.stat(entryPath);
-          const type = entryStat.isDirectory() ? "d" : "-";
+          const isDir = entryStat.isDirectory();
+          const type = isDir ? "d" : "-";
           const perms = "rwxr-xr-x";
-          const size = String(entryStat.size).padStart(8);
+          const size = formatSize(entryStat.size, humanReadable);
           const date = entryStat.mtime.toISOString().slice(0, 10);
-          await ctx.stdout.writeText(`${type}${perms} ${size} ${date} ${entry}\n`);
+          const name = colorize(entry, isDir, isTTY);
+          await ctx.stdout.writeText(`${type}${perms} ${size} ${date} ${name}\n`);
         } catch {
           await ctx.stdout.writeText(`?????????? ${entry}\n`);
         }
       }
-    } else if (onePerLine || !ctx.stdout.isTTY) {
-      for (const entry of entries) {
-        await ctx.stdout.writeText(entry + "\n");
+    } else if (onePerLine || !isTTY) {
+      if (isTTY) {
+        // -1 flag with TTY: still colorize directories
+        const dirSet = new Set<string>();
+        for (const entry of entries) {
+          try {
+            const entryStat = await ctx.fs.stat(ctx.fs.resolve(dirPath, entry));
+            if (entryStat.isDirectory()) dirSet.add(entry);
+          } catch {}
+        }
+        for (const entry of entries) {
+          await ctx.stdout.writeText(colorize(entry, dirSet.has(entry), true) + "\n");
+        }
+      } else {
+        for (const entry of entries) {
+          await ctx.stdout.writeText(entry + "\n");
+        }
       }
     } else {
+      // TTY default: space-separated with colors
       if (entries.length > 0) {
-        await ctx.stdout.writeText(entries.join("  ") + "\n");
+        const dirSet = new Set<string>();
+        for (const entry of entries) {
+          try {
+            const entryStat = await ctx.fs.stat(ctx.fs.resolve(dirPath, entry));
+            if (entryStat.isDirectory()) dirSet.add(entry);
+          } catch {}
+        }
+        const colored = entries.map((e) => colorize(e, dirSet.has(e), true));
+        await ctx.stdout.writeText(colored.join("  ") + "\n");
       }
     }
 
