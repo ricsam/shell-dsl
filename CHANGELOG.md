@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.26
+
+### Patch Changes
+
+- improve ls
+
 ## 0.0.25
 
 ### Patch Changes
