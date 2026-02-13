@@ -1,11 +1,13 @@
 import type { Command } from "../../types.ts";
 import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+import { matchGlob } from "../../utils/match-glob.ts";
 
 interface TreeFlags {
   all: boolean;
   directoriesOnly: boolean;
   maxDepth: number;
   dirsfirst: boolean;
+  ignorePatterns: string[];
 }
 
 const spec = {
@@ -14,12 +16,13 @@ const spec = {
     { short: "a", long: "all" },
     { short: "d" },
     { short: "L", takesValue: true },
+    { short: "I", takesValue: true },
     { long: "dirsfirst" },
   ] as FlagDefinition[],
-  usage: "tree [-ad] [-L level] [--dirsfirst] [directory ...]",
+  usage: "tree [-adI] [-L level] [-I pattern] [--dirsfirst] [directory ...]",
 };
 
-const defaults: TreeFlags = { all: false, directoriesOnly: false, maxDepth: Infinity, dirsfirst: true };
+const defaults: TreeFlags = { all: false, directoriesOnly: false, maxDepth: Infinity, dirsfirst: true, ignorePatterns: [] };
 
 interface HandlerResult {
   error?: string;
@@ -31,6 +34,12 @@ const handler = (flags: TreeFlags, flag: FlagDefinition, value?: string) => {
   if (flag.short === "a") flags.all = true;
   if (flag.short === "d") flags.directoriesOnly = true;
   if (flag.long === "dirsfirst") flags.dirsfirst = true;
+  if (flag.short === "I" && value) {
+    if (flags.ignorePatterns === defaults.ignorePatterns) {
+      flags.ignorePatterns = [];
+    }
+    flags.ignorePatterns.push(...value.split("|"));
+  }
   if (flag.short === "L" && value) {
     const depth = parseInt(value, 10);
     if (isNaN(depth) || !/^\d+$/.test(value)) {
@@ -59,7 +68,7 @@ export const tree: Command = async (ctx) => {
     return 1;
   }
 
-  const { all: showAll, directoriesOnly, maxDepth } = result.flags;
+  const { all: showAll, directoriesOnly, maxDepth, ignorePatterns } = result.flags;
   const targetPath = result.args[0] ?? ".";
 
   // Validate maxDepth
@@ -100,6 +109,11 @@ export const tree: Command = async (ctx) => {
     // Filter hidden files unless -a
     if (!showAll) {
       entries = entries.filter((e) => !e.startsWith("."));
+    }
+
+    // Filter by -I ignore patterns
+    if (ignorePatterns.length > 0) {
+      entries = entries.filter((e) => !ignorePatterns.some((p) => matchGlob(p, e)));
     }
 
     // Sort entries

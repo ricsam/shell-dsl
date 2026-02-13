@@ -8,3 +8,4 @@ export {
   type ParseResult,
   type FlagParser,
 } from "./flag-parser.ts";
+export { matchGlob } from "./match-glob.ts";

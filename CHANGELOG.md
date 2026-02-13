@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.27
+
+### Patch Changes
+
+- add -I to find/glob
+
 ## 0.0.26
 
 ### Patch Changes

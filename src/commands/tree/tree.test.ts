@@ -229,4 +229,73 @@ describe("tree command", () => {
     expect(result.stderr.toString()).toContain("unrecognized option");
     expect(result.stderr.toString()).toContain("usage:");
   });
+
+  test("-I excludes matching files", async () => {
+    const result = await sh`tree -I 'file1.txt' /mydir`.text();
+    expect(result).not.toContain("file1.txt");
+    expect(result).toContain("file2.txt");
+    expect(result).toContain("subdir");
+  });
+
+  test("-I excludes matching directories and their contents", async () => {
+    const result = await sh`tree -I subdir /mydir`.text();
+    expect(result).not.toContain("subdir");
+    expect(result).not.toContain("nested.txt");
+    expect(result).not.toContain("deep");
+    expect(result).toContain("file1.txt");
+  });
+
+  test("-I with pipe-delimited patterns excludes multiple names", async () => {
+    const result = await sh`tree -I 'subdir|file1.txt' /mydir`.text();
+    expect(result).not.toContain("subdir");
+    expect(result).not.toContain("file1.txt");
+    expect(result).toContain("file2.txt");
+  });
+
+  test("-I with glob wildcard pattern", async () => {
+    const result = await sh`tree -I '*.txt' /mydir`.text();
+    expect(result).not.toContain("file1.txt");
+    expect(result).not.toContain("file2.txt");
+    expect(result).not.toContain("nested.txt");
+    expect(result).toContain("subdir");
+    expect(result).toContain("deep");
+  });
+
+  test("-I specified multiple times accumulates patterns", async () => {
+    const result = await sh`tree -I subdir -I file1.txt /mydir`.text();
+    expect(result).not.toContain("subdir");
+    expect(result).not.toContain("file1.txt");
+    expect(result).toContain("file2.txt");
+  });
+
+  test("-I affects summary counts", async () => {
+    const withoutIgnore = await sh`tree /mydir`.text();
+    const withIgnore = await sh`tree -I subdir /mydir`.text();
+    // Without -I, subdir and its contents are counted
+    expect(withoutIgnore).toContain("directories");
+    // With -I subdir, there should be fewer directories
+    const countDirs = (s: string) => {
+      const match = s.match(/(\d+) director/);
+      return match ? parseInt(match[1]!) : -1;
+    };
+    expect(countDirs(withIgnore)).toBeLessThan(countDirs(withoutIgnore));
+  });
+
+  test("-I does not affect hidden file filtering", async () => {
+    // -I should work independently of -a
+    const result = await sh`tree -aI '*.txt' /mydir`.text();
+    expect(result).not.toContain("file1.txt");
+    expect(result).not.toContain("file2.txt");
+    // Hidden entries should still appear with -a
+    expect(result).toContain(".hidden");
+    expect(result).toContain(".hiddendir");
+  });
+
+  test("-I does not persist across invocations", async () => {
+    // First call with -I
+    await sh`tree -I subdir /mydir`.text();
+    // Second call without -I should show everything
+    const result = await sh`tree /mydir`.text();
+    expect(result).toContain("subdir");
+  });
 });

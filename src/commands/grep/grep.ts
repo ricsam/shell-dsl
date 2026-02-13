@@ -1,5 +1,6 @@
 import type { Command } from "../../types.ts";
 import { createFlagParser, type FlagDefinition, type FlagError } from "../../utils/flag-parser.ts";
+import { matchGlob } from "../../utils/match-glob.ts";
 
 interface GrepOptions {
   patterns: string[];
@@ -116,18 +117,6 @@ const handler = (flags: GrepOptions, flag: FlagDefinition, value?: string) => {
   }
 };
 
-function matchGlob(str: string, pattern: string): boolean {
-  // Convert shell glob to regex: * -> .*, ? -> ., rest escaped
-  let re = "^";
-  for (const ch of pattern) {
-    if (ch === "*") re += ".*";
-    else if (ch === "?") re += ".";
-    else if (/[.+^${}()|[\]\\]/.test(ch)) re += "\\" + ch;
-    else re += ch;
-  }
-  re += "$";
-  return new RegExp(re).test(str);
-}
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -263,11 +252,11 @@ export const grep: Command = async (ctx) => {
       expandedFiles = expandedFiles.filter((f) => {
         const basename = ctx.fs.basename(f);
         if (options.include.length > 0) {
-          const included = options.include.some((pat) => matchGlob(basename, pat));
+          const included = options.include.some((pat) => matchGlob(pat, basename));
           if (!included) return false;
         }
         if (options.exclude.length > 0) {
-          const excluded = options.exclude.some((pat) => matchGlob(basename, pat));
+          const excluded = options.exclude.some((pat) => matchGlob(pat, basename));
           if (excluded) return false;
         }
         return true;
