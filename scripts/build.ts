@@ -22,7 +22,7 @@ const buildPackage = async () => {
           declaration: true,
           esModuleInterop: true,
           inlineSourceMap: false,
-          lib: ['ESNext'],
+          lib: ['ESNext', 'DOM', 'DOM.Iterable', 'DOM.AsyncIterable'],
           listEmittedFiles: false,
           listFiles: false,
           moduleResolution: 'bundler',
