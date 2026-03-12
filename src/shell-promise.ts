@@ -94,7 +94,7 @@ export class ShellPromise implements PromiseLike<ExecResult> {
 
   async blob(): Promise<Blob> {
     const result = await this.run();
-    return new Blob([result.stdout]);
+    return new Blob([new Uint8Array(result.stdout)]);
   }
 
   async buffer(): Promise<Buffer> {

@@ -75,6 +75,8 @@ export { createVirtualFS } from "./fs/index.ts";
 export {
   FileSystem,
   ReadOnlyFileSystem,
+  OPFSFileSystem,
+  createOPFSUnderlyingFS,
   type Permission,
   type PermissionRules,
   type UnderlyingFS,

@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.29
+
+### Patch Changes
+
+- add opfs filesystem export
+
 ## 0.0.28
 
 ### Patch Changes

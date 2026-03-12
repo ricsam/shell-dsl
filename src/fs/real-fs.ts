@@ -124,8 +124,13 @@ export class FileSystem implements VirtualFS {
     const realPath = path.join(this.mountBase, relativePath);
     const resolved = path.resolve(realPath);
 
-    // Double-check containment (defense in depth)
-    if (!resolved.startsWith(this.mountBase + path.sep) && resolved !== this.mountBase) {
+    // Double-check containment (defense in depth), including root mounts.
+    const relativeFromMount = path.relative(this.mountBase, resolved);
+    const escapesMount =
+      relativeFromMount === ".." ||
+      relativeFromMount.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativeFromMount);
+    if (escapesMount) {
       throw new Error(`Path traversal blocked: "${virtualPath}" escapes mount point`);
     }
 
