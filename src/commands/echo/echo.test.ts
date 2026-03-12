@@ -40,6 +40,11 @@ describe("echo command", () => {
       const result = await sh`echo "hello world"`.text();
       expect(result).toBe("hello world\n");
     });
+
+    test("treats triple hyphen as literal text", async () => {
+      const result = await sh`echo "---"`.text();
+      expect(result).toBe("---\n");
+    });
   });
 
   describe("-n flag (no newline)", () => {

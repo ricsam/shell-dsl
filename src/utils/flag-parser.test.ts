@@ -83,6 +83,15 @@ describe("flag-parser", () => {
       expect(result.flags.list).toBe(false);
       expect(result.args).toEqual(["-l", "file.txt"]);
     });
+
+    test("treats triple hyphen token as positional argument", () => {
+      const result = parser.parse(["---", "file.txt"]);
+      expect(result.error).toBeUndefined();
+      expect(result.flags.all).toBe(false);
+      expect(result.flags.list).toBe(false);
+      expect(result.flags.recursive).toBe(false);
+      expect(result.args).toEqual(["---", "file.txt"]);
+    });
   });
 
   describe("value flags", () => {

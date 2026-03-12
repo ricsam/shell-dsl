@@ -68,6 +68,17 @@ export function createFlagParser<T>(
         break;
       }
 
+      // Treat all-hyphen tokens (e.g., ---) as positional arguments.
+      // This avoids misparsing delimiters as long/short options.
+      if (/^--+$/.test(arg)) {
+        remainingArgs.push(arg);
+        if (spec.stopAfterFirstPositional) {
+          parsingFlags = false;
+        }
+        i++;
+        continue;
+      }
+
       // If we've stopped parsing flags, just collect remaining args
       if (!parsingFlags) {
         remainingArgs.push(arg);
