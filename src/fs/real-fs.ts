@@ -4,9 +4,20 @@ import type { VirtualFS, FileStat } from "../types.ts";
 
 export type Permission = "read-write" | "read-only" | "excluded";
 export type PermissionRules = Record<string, Permission>;
+export interface PathOps {
+  readonly separator: string;
+  resolve(...paths: string[]): string;
+  normalize(path: string): string;
+  join(...paths: string[]): string;
+  relative(from: string, to: string): string;
+  isAbsolute(path: string): boolean;
+  dirname(path: string): string;
+  basename(path: string): string;
+}
 
 // Minimal interface for the underlying fs (compatible with node:fs and memfs)
 export interface UnderlyingFS {
+  pathOps?: PathOps;
   promises: {
     readFile(path: string): Promise<Buffer | Uint8Array | string>;
     readdir(path: string): Promise<string[]>;
@@ -25,6 +36,16 @@ export interface UnderlyingFS {
 
 // Default: use real node:fs
 const defaultFS: UnderlyingFS = { promises: nodeFs };
+const nodePathOps: PathOps = {
+  separator: path.sep,
+  resolve: (...paths) => path.resolve(...paths),
+  normalize: (filePath) => path.normalize(filePath),
+  join: (...paths) => path.join(...paths),
+  relative: (from, to) => path.relative(from, to),
+  isAbsolute: (filePath) => path.isAbsolute(filePath),
+  dirname: (filePath) => path.dirname(filePath),
+  basename: (filePath) => path.basename(filePath),
+};
 
 interface CompiledRule {
   pattern: string;
@@ -35,12 +56,15 @@ interface CompiledRule {
 export class FileSystem implements VirtualFS {
   private readonly mountBase: string | null;
   private readonly rules: CompiledRule[];
+  private readonly pathOps: PathOps;
   protected readonly underlyingFs: UnderlyingFS;
 
   constructor(mountPath?: string, permissions?: PermissionRules, fs?: UnderlyingFS) {
-    this.mountBase = mountPath ? path.resolve(mountPath) : null;
+    const underlyingFs = fs ?? defaultFS;
+    this.pathOps = underlyingFs.pathOps ?? nodePathOps;
+    this.mountBase = mountPath ? this.pathOps.resolve(mountPath) : null;
     this.rules = this.compileRules(permissions ?? {});
-    this.underlyingFs = fs ?? defaultFS;
+    this.underlyingFs = underlyingFs;
   }
 
   private compileRules(permissions: PermissionRules): CompiledRule[] {
@@ -102,7 +126,7 @@ export class FileSystem implements VirtualFS {
 
   private resolveSafePath(virtualPath: string): string {
     if (this.mountBase === null) {
-      return path.resolve(virtualPath);
+      return this.pathOps.resolve(virtualPath);
     }
 
     // Check for path traversal by tracking depth
@@ -119,17 +143,17 @@ export class FileSystem implements VirtualFS {
       }
     }
 
-    const normalized = path.normalize(virtualPath);
+    const normalized = this.pathOps.normalize(virtualPath);
     const relativePath = normalized.startsWith("/") ? normalized.slice(1) : normalized;
-    const realPath = path.join(this.mountBase, relativePath);
-    const resolved = path.resolve(realPath);
+    const realPath = this.pathOps.join(this.mountBase, relativePath);
+    const resolved = this.pathOps.resolve(realPath);
 
     // Double-check containment (defense in depth), including root mounts.
-    const relativeFromMount = path.relative(this.mountBase, resolved);
+    const relativeFromMount = this.pathOps.relative(this.mountBase, resolved);
     const escapesMount =
       relativeFromMount === ".." ||
-      relativeFromMount.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relativeFromMount);
+      relativeFromMount.startsWith(`..${this.pathOps.separator}`) ||
+      this.pathOps.isAbsolute(relativeFromMount);
     if (escapesMount) {
       throw new Error(`Path traversal blocked: "${virtualPath}" escapes mount point`);
     }
@@ -205,15 +229,15 @@ export class FileSystem implements VirtualFS {
 
   // Path utilities (no permission check needed)
   resolve(...paths: string[]): string {
-    return path.resolve("/", ...paths);
+    return this.pathOps.resolve("/", ...paths);
   }
 
   dirname(filePath: string): string {
-    return path.dirname(filePath);
+    return this.pathOps.dirname(filePath);
   }
 
   basename(filePath: string): string {
-    return path.basename(filePath);
+    return this.pathOps.basename(filePath);
   }
 
   // Glob with permission filtering
@@ -286,7 +310,7 @@ export class FileSystem implements VirtualFS {
         const realPath = this.resolveSafePath(currentPath);
         const entries = await this.underlyingFs.promises.readdir(realPath);
         for (const entry of entries) {
-          const entryPath = path.posix.join(currentPath, String(entry));
+          const entryPath = this.pathOps.join(currentPath, String(entry));
           try {
             const entryRealPath = this.resolveSafePath(entryPath);
             const stat = await this.underlyingFs.promises.stat(entryRealPath);
@@ -316,7 +340,7 @@ export class FileSystem implements VirtualFS {
       for (const entry of entries) {
         const entryName = String(entry);
         if (regex.test(entryName)) {
-          const entryPath = path.posix.join(currentPath, entryName);
+          const entryPath = this.pathOps.join(currentPath, entryName);
           if (rest.length === 0) {
             results.push(entryPath);
           } else {

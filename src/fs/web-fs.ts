@@ -1,9 +1,66 @@
-import { FileSystem, type PermissionRules, type UnderlyingFS } from "./real-fs.ts";
+import { FileSystem, type PathOps, type PermissionRules, type UnderlyingFS } from "./real-fs.ts";
 
 const DIRECTORY_MTIME = new Date(0);
+const WEB_PATH_OPS: PathOps = {
+  separator: "/",
+  resolve(...paths: string[]): string {
+    return normalizeWebPath(paths.join("/"));
+  },
+  normalize: normalizeWebPath,
+  join(...paths: string[]): string {
+    const nonEmpty = paths.filter((segment) => segment.length > 0);
+    if (nonEmpty.length === 0) {
+      return ".";
+    }
+    return normalizeWebPath(nonEmpty.join("/"));
+  },
+  relative(from: string, to: string): string {
+    const fromSegments = getPathSegments(from);
+    const toSegments = getPathSegments(to);
+    let shared = 0;
 
-export function createOPFSUnderlyingFS(root: FileSystemDirectoryHandle): UnderlyingFS {
+    while (
+      shared < fromSegments.length &&
+      shared < toSegments.length &&
+      fromSegments[shared] === toSegments[shared]
+    ) {
+      shared++;
+    }
+
+    const up = new Array(fromSegments.length - shared).fill("..");
+    const down = toSegments.slice(shared);
+    return [...up, ...down].join("/");
+  },
+  isAbsolute(path: string): boolean {
+    return path.startsWith("/");
+  },
+  dirname(path: string): string {
+    const normalized = normalizeWebPath(path);
+    if (normalized === "/") {
+      return "/";
+    }
+
+    const segments = getPathSegments(normalized);
+    if (segments.length <= 1) {
+      return "/";
+    }
+
+    return `/${segments.slice(0, -1).join("/")}`;
+  },
+  basename(path: string): string {
+    const normalized = normalizeWebPath(path);
+    if (normalized === "/") {
+      return "";
+    }
+
+    const segments = getPathSegments(normalized);
+    return segments[segments.length - 1] ?? "";
+  },
+};
+
+export function createWebUnderlyingFS(root: FileSystemDirectoryHandle): UnderlyingFS {
   return {
+    pathOps: WEB_PATH_OPS,
     promises: {
       async readFile(path: string): Promise<Buffer> {
         const { parentSegments, name } = splitParent(path);
@@ -97,7 +154,7 @@ export function createOPFSUnderlyingFS(root: FileSystemDirectoryHandle): Underly
         const name = segments[segments.length - 1]!;
         const exists = await entryExists(parent, name);
         if (exists) {
-          throw new Error(`EEXIST: file already exists, mkdir '${normalizeOpfsPath(path)}'`);
+          throw new Error(`EEXIST: file already exists, mkdir '${normalizeWebPath(path)}'`);
         }
         await parent.getDirectoryHandle(name, { create: true });
       },
@@ -123,9 +180,9 @@ export function createOPFSUnderlyingFS(root: FileSystemDirectoryHandle): Underly
   };
 }
 
-export class OPFSFileSystem extends FileSystem {
+export class WebFileSystem extends FileSystem {
   constructor(root: FileSystemDirectoryHandle, permissions?: PermissionRules) {
-    super("/", permissions, createOPFSUnderlyingFS(root));
+    super("/", permissions, createWebUnderlyingFS(root));
   }
 }
 
@@ -138,7 +195,7 @@ function createDirectoryStat() {
   };
 }
 
-function normalizeOpfsPath(path: string): string {
+function normalizeWebPath(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   const rawSegments = (normalized.startsWith("/") ? normalized : `/${normalized}`)
     .split("/")
@@ -158,7 +215,7 @@ function normalizeOpfsPath(path: string): string {
 }
 
 function getPathSegments(path: string): string[] {
-  const normalized = normalizeOpfsPath(path);
+  const normalized = normalizeWebPath(path);
   return normalized.split("/").filter(Boolean);
 }
 

@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { FileSystem, OPFSFileSystem, createOPFSUnderlyingFS } from "../src/index.ts";
+import {
+  FileSystem,
+  WebFileSystem,
+  createWebUnderlyingFS,
+} from "../src/index.ts";
 
 type FakeNode = FakeDirNode | FakeFileNode;
 
@@ -17,7 +21,7 @@ interface FakeFileNode {
 
 const encoder = new TextEncoder();
 
-describe("OPFSFileSystem", () => {
+describe("WebFileSystem", () => {
   let root: FileSystemDirectoryHandle;
 
   beforeEach(() => {
@@ -30,7 +34,7 @@ describe("OPFSFileSystem", () => {
 
   describe("basic operations", () => {
     test("reads, writes, and appends files", async () => {
-      const fs = new OPFSFileSystem(root);
+      const fs = new WebFileSystem(root);
 
       expect(await fs.readFile("/docs/readme.txt", "utf8")).toBe("hello");
 
@@ -45,7 +49,7 @@ describe("OPFSFileSystem", () => {
     });
 
     test("supports readdir, stat, exists, and glob", async () => {
-      const fs = new OPFSFileSystem(root);
+      const fs = new WebFileSystem(root);
 
       const rootEntries = await fs.readdir("/");
       expect(rootEntries).toContain("docs");
@@ -70,8 +74,16 @@ describe("OPFSFileSystem", () => {
       expect(matches).toContain("/secrets/token.txt");
     });
 
+    test("uses POSIX-style path utilities without Node path", () => {
+      const fs = new WebFileSystem(root);
+
+      expect(fs.resolve("/docs", "..", "secrets", "token.txt")).toBe("/secrets/token.txt");
+      expect(fs.dirname("/docs/notes/todo.txt")).toBe("/docs/notes");
+      expect(fs.basename("/docs/notes/todo.txt")).toBe("todo.txt");
+    });
+
     test("supports mkdir and rm semantics", async () => {
-      const fs = new OPFSFileSystem(root);
+      const fs = new WebFileSystem(root);
 
       await fs.mkdir("/new/a/b", { recursive: true });
       expect(await fs.exists("/new/a/b")).toBe(true);
@@ -93,7 +105,7 @@ describe("OPFSFileSystem", () => {
 
   describe("permissions and path safety", () => {
     test("honors excluded and read-only permission rules", async () => {
-      const fs = new OPFSFileSystem(root, {
+      const fs = new WebFileSystem(root, {
         "secrets/**": "excluded",
         "docs/**": "read-only",
         "docs/readme.txt": "read-write",
@@ -107,7 +119,7 @@ describe("OPFSFileSystem", () => {
     });
 
     test("keeps mount safety checks at root", async () => {
-      const fs = new OPFSFileSystem(root);
+      const fs = new WebFileSystem(root);
       await expect(fs.readFile("/../docs/readme.txt")).rejects.toThrow(/escapes mount/);
       await expect(fs.rm("/", { recursive: true })).rejects.toThrow(/EPERM/);
     });
@@ -115,10 +127,11 @@ describe("OPFSFileSystem", () => {
 
   describe("adapter usage with FileSystem", () => {
     test("works when injected into FileSystem directly", async () => {
-      const fs = new FileSystem("/", {}, createOPFSUnderlyingFS(root));
+      const fs = new FileSystem("/", {}, createWebUnderlyingFS(root));
 
       await fs.writeFile("/direct.txt", "ok");
       expect(await fs.readFile("/direct.txt", "utf8")).toBe("ok");
+      expect(fs.resolve("/docs", "..", "direct.txt")).toBe("/direct.txt");
     });
   });
 });

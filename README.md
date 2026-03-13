@@ -695,27 +695,27 @@ Omit the mount path for unrestricted access, but this is the same as just passin
 const fs = new FileSystem();  // Full filesystem access same as fs from node:fs
 ```
 
-### OPFS (Browser)
+### Web Filesystem
 
-Use `OPFSFileSystem` when you already have an OPFS root directory handle in the browser:
+Use `WebFileSystem` when you already have a `FileSystemDirectoryHandle` in the browser, including an OPFS root from `navigator.storage.getDirectory()`:
 
 ```ts
-import { OPFSFileSystem } from "shell-dsl";
+import { WebFileSystem } from "shell-dsl";
 
 const root = await navigator.storage.getDirectory();
-const fs = new OPFSFileSystem(root, {
+const fs = new WebFileSystem(root, {
   "secrets/**": "excluded",
   "docs/**": "read-only",
 });
 ```
 
-For advanced use, you can inject the OPFS adapter into `FileSystem` directly:
+For advanced use, you can inject the web adapter into `FileSystem` directly:
 
 ```ts
-import { FileSystem, createOPFSUnderlyingFS } from "shell-dsl";
+import { FileSystem, createWebUnderlyingFS } from "shell-dsl";
 
 const root = await navigator.storage.getDirectory();
-const fs = new FileSystem("/", {}, createOPFSUnderlyingFS(root));
+const fs = new FileSystem("/", {}, createWebUnderlyingFS(root));
 ```
 
 
