@@ -88,4 +88,5 @@ export { createStdin, StdinImpl } from "./io/index.ts";
 export { createStdout, createStderr, createPipe, OutputCollectorImpl, PipeBuffer } from "./io/index.ts";
 
 // Utilities
-export { escape, escapeForInterpolation } from "./utils/index.ts";
+export { escape, escapeForInterpolation, globVirtualFS } from "./utils/index.ts";
+export type { GlobVirtualFS, GlobOptions } from "./utils/index.ts";

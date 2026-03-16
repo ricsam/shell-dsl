@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as nodeFs from "node:fs/promises";
 import type { VirtualFS, FileStat } from "../types.ts";
+import { globVirtualFS } from "../utils/glob.ts";
 
 export type Permission = "read-write" | "read-only" | "excluded";
 export type PermissionRules = Record<string, Permission>;
@@ -240,155 +241,10 @@ export class FileSystem implements VirtualFS {
     return this.pathOps.basename(filePath);
   }
 
-  // Glob with permission filtering
+  // Glob expansion
   async glob(pattern: string, opts?: { cwd?: string }): Promise<string[]> {
     const cwd = opts?.cwd ?? "/";
     this.checkPermission(cwd, "read");
-
-    const matches = await this.expandGlob(pattern, cwd);
-
-    // Filter out excluded paths
-    return matches.filter((p) => this.getPermission(p) !== "excluded").sort();
-  }
-
-  // Glob expansion (similar to memfs-adapter implementation)
-  private async expandGlob(pattern: string, cwd: string): Promise<string[]> {
-    // Handle brace expansion first
-    const patterns = this.expandBraces(pattern);
-    const allMatches: string[] = [];
-
-    for (const pat of patterns) {
-      const matches = await this.matchPattern(pat, cwd);
-      allMatches.push(...matches);
-    }
-
-    // Remove duplicates and sort
-    return [...new Set(allMatches)].sort();
-  }
-
-  private expandBraces(pattern: string): string[] {
-    const braceMatch = pattern.match(/\{([^{}]+)\}/);
-    if (!braceMatch) return [pattern];
-
-    const before = pattern.slice(0, braceMatch.index);
-    const after = pattern.slice(braceMatch.index! + braceMatch[0].length);
-    const options = braceMatch[1]!.split(",");
-
-    const results: string[] = [];
-    for (const opt of options) {
-      const expanded = this.expandBraces(before + opt + after);
-      results.push(...expanded);
-    }
-    return results;
-  }
-
-  private async matchPattern(pattern: string, cwd: string): Promise<string[]> {
-    const parts = pattern.split("/").filter((p) => p !== "");
-    const isAbsolute = pattern.startsWith("/");
-    const startDir = isAbsolute ? "/" : cwd;
-
-    return this.matchParts(parts, startDir);
-  }
-
-  private async matchParts(parts: string[], currentPath: string): Promise<string[]> {
-    if (parts.length === 0) {
-      return [currentPath];
-    }
-
-    const [part, ...rest] = parts;
-
-    // Handle ** (recursive glob)
-    if (part === "**") {
-      const results: string[] = [];
-
-      // Match current directory
-      const withoutStar = await this.matchParts(rest, currentPath);
-      results.push(...withoutStar);
-
-      // Recurse into subdirectories
-      try {
-        const realPath = this.resolveSafePath(currentPath);
-        const entries = await this.underlyingFs.promises.readdir(realPath);
-        for (const entry of entries) {
-          const entryPath = this.pathOps.join(currentPath, String(entry));
-          try {
-            const entryRealPath = this.resolveSafePath(entryPath);
-            const stat = await this.underlyingFs.promises.stat(entryRealPath);
-            if (stat.isDirectory()) {
-              const subMatches = await this.matchParts(parts, entryPath);
-              results.push(...subMatches);
-            }
-          } catch {
-            // Skip inaccessible entries
-          }
-        }
-      } catch {
-        // Directory not readable
-      }
-
-      return results;
-    }
-
-    // Handle regular glob patterns
-    const regex = this.globToRegex(part!);
-
-    try {
-      const realPath = this.resolveSafePath(currentPath);
-      const entries = await this.underlyingFs.promises.readdir(realPath);
-      const results: string[] = [];
-
-      for (const entry of entries) {
-        const entryName = String(entry);
-        if (regex.test(entryName)) {
-          const entryPath = this.pathOps.join(currentPath, entryName);
-          if (rest.length === 0) {
-            results.push(entryPath);
-          } else {
-            try {
-              const entryRealPath = this.resolveSafePath(entryPath);
-              const stat = await this.underlyingFs.promises.stat(entryRealPath);
-              if (stat.isDirectory()) {
-                const subMatches = await this.matchParts(rest, entryPath);
-                results.push(...subMatches);
-              }
-            } catch {
-              // Skip inaccessible entries
-            }
-          }
-        }
-      }
-
-      return results;
-    } catch {
-      return [];
-    }
-  }
-
-  private globToRegex(pattern: string): RegExp {
-    let regex = "^";
-    for (let i = 0; i < pattern.length; i++) {
-      const char = pattern[i]!;
-      if (char === "*") {
-        regex += "[^/]*";
-      } else if (char === "?") {
-        regex += "[^/]";
-      } else if (char === "[") {
-        // Character class
-        let j = i + 1;
-        let classContent = "";
-        while (j < pattern.length && pattern[j] !== "]") {
-          classContent += pattern[j];
-          j++;
-        }
-        regex += `[${classContent}]`;
-        i = j;
-      } else if (".+^${}()|\\".includes(char)) {
-        regex += "\\" + char;
-      } else {
-        regex += char;
-      }
-    }
-    regex += "$";
-    return new RegExp(regex);
+    return globVirtualFS(this, pattern, { cwd });
   }
 }

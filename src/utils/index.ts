@@ -1,5 +1,6 @@
 export { escape, escapeForInterpolation } from "./escape.ts";
 export { expandEscapes } from "./expand-escapes.ts";
+export { globVirtualFS, type GlobVirtualFS, type GlobOptions } from "./glob.ts";
 export {
   createFlagParser,
   type FlagDefinition,

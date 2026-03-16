@@ -616,6 +616,32 @@ interface VirtualFS {
 }
 ```
 
+### `globVirtualFS` Helper
+
+If you're implementing a custom `VirtualFS`, especially a composite or mounted filesystem, you can reuse `globVirtualFS()` instead of writing glob traversal yourself:
+
+```ts
+import { globVirtualFS, type VirtualFS } from "shell-dsl";
+
+class CompositeFileSystem implements VirtualFS {
+  // ... implement readFile/readdir/stat/etc.
+
+  async glob(pattern: string, opts?: { cwd?: string }): Promise<string[]> {
+    return globVirtualFS(this, pattern, opts);
+  }
+}
+```
+
+`globVirtualFS()` walks the visible virtual tree using only `readdir()`, `stat()`, and `resolve()`, so it works correctly for filesystems that mount different host directories under one virtual namespace.
+
+It supports the same shell-style patterns used by the interpreter:
+
+- `*.txt` for segment wildcards
+- `**/*.ts` for recursive matches
+- `file-?.md` for single-character matches
+- `{a,b}.json` for brace expansion
+- `[ab].txt` for character classes
+
 ## Real Filesystem Access
 
 For scenarios where you need to access the real filesystem with sandboxing, use `FileSystem` or `ReadOnlyFileSystem`:
