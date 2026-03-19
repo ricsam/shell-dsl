@@ -5,6 +5,7 @@ import { createStdin } from "../io/stdin.ts";
 import { createStdout, createStderr, createPipe, PipeBuffer, createBufferTargetCollector } from "../io/stdout.ts";
 import { Lexer } from "../lexer/lexer.ts";
 import { Parser } from "../parser/parser.ts";
+import { isDevNullPath } from "../fs/special-files.ts";
 
 export interface InterpreterOptions {
   fs: VirtualFS;
@@ -311,7 +312,7 @@ export class Interpreter {
           };
         }
         // /dev/null: empty input
-        if (target === "/dev/null") {
+        if (isDevNullPath(target)) {
           return {
             stdin: (async function* () {})(),
             stdout,
@@ -332,7 +333,7 @@ export class Interpreter {
       case ">": {
         // Output redirect (overwrite)
         const collector = createStdout();
-        if (target === "/dev/null") {
+        if (isDevNullPath(target)) {
           return { stdin, stdout: collector, stderr };
         }
         const path = this.fs.resolve(this.cwd, target);
@@ -345,7 +346,7 @@ export class Interpreter {
       case ">>": {
         // Output redirect (append)
         const collector = createStdout();
-        if (target === "/dev/null") {
+        if (isDevNullPath(target)) {
           return { stdin, stdout: collector, stderr };
         }
         const path = this.fs.resolve(this.cwd, target);
@@ -358,7 +359,7 @@ export class Interpreter {
       case "2>": {
         // Stderr redirect (overwrite)
         const collector = createStderr();
-        if (target === "/dev/null") {
+        if (isDevNullPath(target)) {
           return { stdin, stdout, stderr: collector };
         }
         const path = this.fs.resolve(this.cwd, target);
@@ -371,7 +372,7 @@ export class Interpreter {
       case "2>>": {
         // Stderr redirect (append)
         const collector = createStderr();
-        if (target === "/dev/null") {
+        if (isDevNullPath(target)) {
           return { stdin, stdout, stderr: collector };
         }
         const path = this.fs.resolve(this.cwd, target);
@@ -384,7 +385,7 @@ export class Interpreter {
       case "&>": {
         // Both to file (overwrite)
         const collector = createStdout();
-        if (target === "/dev/null") {
+        if (isDevNullPath(target)) {
           return { stdin, stdout: collector, stderr: collector };
         }
         const path = this.fs.resolve(this.cwd, target);
@@ -397,7 +398,7 @@ export class Interpreter {
       case "&>>": {
         // Both to file (append)
         const collector = createStdout();
-        if (target === "/dev/null") {
+        if (isDevNullPath(target)) {
           return { stdin, stdout: collector, stderr: collector };
         }
         const path = this.fs.resolve(this.cwd, target);

@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { createFsFromVolume, Volume } from "memfs";
-import { createVirtualFS, createShellDSL } from "../src/index.ts";
+import { createVirtualFS, createShellDSL, FileSystem, type UnderlyingFS } from "../src/index.ts";
 import { builtinCommands } from "../src/commands/index.ts";
 
 describe("File truncation", () => {
@@ -39,5 +39,26 @@ describe("File truncation", () => {
     const result = await sh`cat /dev/null > /data.txt`.nothrow();
     expect(result.exitCode).toBe(0);
     expect(vol.readFileSync("/data.txt", "utf8")).toBe("");
+  });
+
+  test("cat /dev/null > file truncates file with mounted FileSystem", async () => {
+    const mountedVol = Volume.fromJSON({
+      "/project/data.txt": "hello world\n",
+    });
+    const mountedFs = new FileSystem(
+      "/project",
+      {},
+      createFsFromVolume(mountedVol) as unknown as UnderlyingFS
+    );
+    const mountedSh = createShellDSL({
+      fs: mountedFs,
+      cwd: "/",
+      env: {},
+      commands: builtinCommands,
+    });
+
+    const result = await mountedSh`cat /dev/null > /data.txt`.nothrow();
+    expect(result.exitCode).toBe(0);
+    expect(mountedVol.readFileSync("/project/data.txt", "utf8")).toBe("");
   });
 });

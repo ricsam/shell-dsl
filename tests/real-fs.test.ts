@@ -31,6 +31,15 @@ describe("FileSystem", () => {
       expect(content.toString()).toBe("console.log('hello');");
     });
 
+    test("treats /dev/null as an empty file", async () => {
+      const fs = new FileSystem("/project", {}, memfs);
+      expect(await fs.readFile("/dev/null", "utf8")).toBe("");
+      expect(await fs.exists("/dev/null")).toBe(true);
+      const stat = await fs.stat("/dev/null");
+      expect(stat.isFile()).toBe(true);
+      expect(stat.size).toBe(0);
+    });
+
     test("lists directory contents", async () => {
       const fs = new FileSystem("/project", {}, memfs);
       const entries = await fs.readdir("/");
@@ -64,6 +73,20 @@ describe("FileSystem", () => {
       expect(vol.readFileSync("/project/src/index.ts", "utf8")).toBe(
         "console.log('hello');\nconsole.log('appended');"
       );
+    });
+
+    test("discards writes to /dev/null", async () => {
+      const fs = new FileSystem("/project", {}, memfs);
+      await fs.writeFile("/dev/null", "ignored");
+      await fs.appendFile("/dev/null", "ignored");
+      expect(vol.existsSync("/project/dev/null")).toBe(false);
+    });
+
+    test("rejects invalid directory and removal operations on /dev/null", async () => {
+      const fs = new FileSystem("/project", {}, memfs);
+      await expect(fs.readdir("/dev/null")).rejects.toThrow(/not a directory/);
+      await expect(fs.mkdir("/dev/null")).rejects.toThrow(/file already exists/);
+      await expect(fs.rm("/dev/null")).rejects.toThrow(/operation not permitted/);
     });
 
     test("creates directory", async () => {

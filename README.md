@@ -564,7 +564,7 @@ import { echo, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk, cut } fr
 | `mv` | Move/rename files/directories (`-n` no-clobber) |
 | `touch` | Create empty files or update timestamps (`-c` no-create) |
 | `tee` | Duplicate stdin to stdout and files (`-a` append) |
-| `tree` | Display directory structure as tree (`-a` all, `-d` dirs only, `-L <n>` depth) |
+| `tree` | Display directory structure as tree (`-a` all, `-d` dirs only, `-L <n>` depth, `-I <pattern>` ignore, `--prune` remove empty dirs) |
 | `find` | Search for files (`-name`, `-iname`, `-type f\|d`, `-maxdepth`, `-mindepth`) |
 | `sed` | Stream editor (`s///`, `d`, `p`, `-n`, `-e`) |
 | `awk` | Pattern scanning (`{print $1}`, `-F`, `NF`, `NR`) |

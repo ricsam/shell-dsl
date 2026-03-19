@@ -32,6 +32,17 @@ describe("rm command", () => {
     expect(vol.existsSync("/file1.txt")).toBe(false);
   });
 
+  test("errors when removing /dev/null", async () => {
+    const result = await sh`rm /dev/null`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("operation not permitted");
+  });
+
+  test("-f ignores attempts to remove /dev/null", async () => {
+    const result = await sh`rm -f /dev/null`.nothrow();
+    expect(result.exitCode).toBe(0);
+  });
+
   test("removes multiple files", async () => {
     await sh`rm /file1.txt /file2.txt`;
     expect(vol.existsSync("/file1.txt")).toBe(false);

@@ -25,6 +25,12 @@ describe("VirtualFS Adapter", () => {
       expect(content.toString()).toBe("content");
     });
 
+    test("treats /dev/null as an empty file", async () => {
+      const content = await fs.readFile("/dev/null");
+      expect(content.toString()).toBe("");
+      expect(await fs.readFile("/dev/null", "utf8")).toBe("");
+    });
+
     test("throws on non-existent file", async () => {
       await expect(fs.readFile("/nonexistent")).rejects.toThrow();
     });
@@ -41,6 +47,10 @@ describe("VirtualFS Adapter", () => {
       const entries = await fs.readdir("/dir");
       expect(entries).toContain("nested.txt");
       expect(entries).toContain("sub");
+    });
+
+    test("throws when reading /dev/null as a directory", async () => {
+      await expect(fs.readdir("/dev/null")).rejects.toThrow(/not a directory/);
     });
   });
 
@@ -62,6 +72,13 @@ describe("VirtualFS Adapter", () => {
     test("throws on non-existent path", async () => {
       await expect(fs.stat("/nonexistent")).rejects.toThrow();
     });
+
+    test("returns FileStat for /dev/null", async () => {
+      const stat = await fs.stat("/dev/null");
+      expect(stat.isFile()).toBe(true);
+      expect(stat.isDirectory()).toBe(false);
+      expect(stat.size).toBe(0);
+    });
   });
 
   describe("exists", () => {
@@ -75,6 +92,10 @@ describe("VirtualFS Adapter", () => {
 
     test("returns false for non-existent path", async () => {
       expect(await fs.exists("/nonexistent")).toBe(false);
+    });
+
+    test("returns true for /dev/null", async () => {
+      expect(await fs.exists("/dev/null")).toBe(true);
     });
   });
 
@@ -93,6 +114,11 @@ describe("VirtualFS Adapter", () => {
       await fs.writeFile("/buffer.txt", Buffer.from("buffer content"));
       expect(vol.readFileSync("/buffer.txt", "utf8")).toBe("buffer content");
     });
+
+    test("discards writes to /dev/null", async () => {
+      await fs.writeFile("/dev/null", "ignored");
+      expect(vol.existsSync("/dev/null")).toBe(false);
+    });
   });
 
   describe("appendFile", () => {
@@ -104,6 +130,11 @@ describe("VirtualFS Adapter", () => {
     test("creates file if not exists", async () => {
       await fs.appendFile("/new-append.txt", "first content");
       expect(vol.readFileSync("/new-append.txt", "utf8")).toBe("first content");
+    });
+
+    test("discards appends to /dev/null", async () => {
+      await fs.appendFile("/dev/null", "ignored");
+      expect(vol.existsSync("/dev/null")).toBe(false);
     });
   });
 
@@ -120,6 +151,10 @@ describe("VirtualFS Adapter", () => {
 
     test("throws without recursive when parent doesn't exist", async () => {
       await expect(fs.mkdir("/nonexistent/child")).rejects.toThrow();
+    });
+
+    test("throws when creating /dev/null as a directory", async () => {
+      await expect(fs.mkdir("/dev/null")).rejects.toThrow(/file already exists/);
     });
   });
 
@@ -147,6 +182,10 @@ describe("VirtualFS Adapter", () => {
     test("does not throw on non-existent with force", async () => {
       await fs.rm("/nonexistent", { force: true });
       // Should not throw
+    });
+
+    test("throws when removing /dev/null", async () => {
+      await expect(fs.rm("/dev/null")).rejects.toThrow(/operation not permitted/);
     });
   });
 

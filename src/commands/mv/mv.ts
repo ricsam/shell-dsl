@@ -1,5 +1,6 @@
 import type { Command } from "../../types.ts";
 import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
+import { DEV_NULL_PATH, isDevNullPath } from "../../fs/special-files.ts";
 
 interface MvFlags {
   noClobber: boolean;
@@ -69,6 +70,11 @@ export const mv: Command = async (ctx) => {
       const finalDest = destIsDir
         ? ctx.fs.resolve(destPath, ctx.fs.basename(srcPath))
         : destPath;
+
+      if (isDevNullPath(srcPath) || isDevNullPath(finalDest)) {
+        await ctx.stderr.writeText(`mv: cannot move to or from special file '${DEV_NULL_PATH}'\n`);
+        return 1;
+      }
 
       // Check if dest exists and noClobber
       if (noClobber) {

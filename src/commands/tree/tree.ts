@@ -7,6 +7,7 @@ interface TreeFlags {
   directoriesOnly: boolean;
   maxDepth: number;
   dirsfirst: boolean;
+  prune: boolean;
   ignorePatterns: string[];
 }
 
@@ -18,11 +19,19 @@ const spec = {
     { short: "L", takesValue: true },
     { short: "I", takesValue: true },
     { long: "dirsfirst" },
+    { long: "prune" },
   ] as FlagDefinition[],
-  usage: "tree [-adI] [-L level] [-I pattern] [--dirsfirst] [directory ...]",
+  usage: "tree [-adI] [-L level] [-I pattern] [--dirsfirst] [--prune] [directory ...]",
 };
 
-const defaults: TreeFlags = { all: false, directoriesOnly: false, maxDepth: Infinity, dirsfirst: true, ignorePatterns: [] };
+const defaults: TreeFlags = {
+  all: false,
+  directoriesOnly: false,
+  maxDepth: Infinity,
+  dirsfirst: true,
+  prune: false,
+  ignorePatterns: [],
+};
 
 interface HandlerResult {
   error?: string;
@@ -34,6 +43,7 @@ const handler = (flags: TreeFlags, flag: FlagDefinition, value?: string) => {
   if (flag.short === "a") flags.all = true;
   if (flag.short === "d") flags.directoriesOnly = true;
   if (flag.long === "dirsfirst") flags.dirsfirst = true;
+  if (flag.long === "prune") flags.prune = true;
   if (flag.short === "I" && value) {
     if (flags.ignorePatterns === defaults.ignorePatterns) {
       flags.ignorePatterns = [];
@@ -68,7 +78,7 @@ export const tree: Command = async (ctx) => {
     return 1;
   }
 
-  const { all: showAll, directoriesOnly, maxDepth, ignorePatterns } = result.flags;
+  const { all: showAll, directoriesOnly, maxDepth, prune, ignorePatterns } = result.flags;
   const targetPath = result.args[0] ?? ".";
 
   // Validate maxDepth
@@ -96,13 +106,15 @@ export const tree: Command = async (ctx) => {
 
   let dirCount = 0;
   let fileCount = 0;
+  const entriesCache = new Map<string, { name: string; path: string; isDir: boolean }[]>();
+  const visibleContentCache = new Map<string, boolean>();
 
   // Print root
   await ctx.stdout.writeText(targetPath + "\n");
 
-  // Recursive function to build tree
-  async function printTree(path: string, prefix: string, depth: number): Promise<void> {
-    if (depth > maxDepth) return;
+  async function getEntries(path: string): Promise<{ name: string; path: string; isDir: boolean }[]> {
+    const cached = entriesCache.get(path);
+    if (cached) return cached;
 
     let entries = await ctx.fs.readdir(path);
 
@@ -119,21 +131,62 @@ export const tree: Command = async (ctx) => {
     // Sort entries
     entries.sort();
 
-    // Separate dirs and files, dirs first
-    const dirEntries: string[] = [];
-    const fileEntries: string[] = [];
+    const resolvedEntries: { name: string; path: string; isDir: boolean }[] = [];
 
-    for (const entry of entries) {
-      const entryPath = ctx.fs.resolve(path, entry);
+    for (const name of entries) {
+      const entryPath = ctx.fs.resolve(path, name);
       try {
         const entryStat = await ctx.fs.stat(entryPath);
-        if (entryStat.isDirectory()) {
-          dirEntries.push(entry);
-        } else {
-          fileEntries.push(entry);
-        }
+        resolvedEntries.push({ name, path: entryPath, isDir: entryStat.isDirectory() });
       } catch {
         // Skip entries we can't stat
+      }
+    }
+
+    entriesCache.set(path, resolvedEntries);
+    return resolvedEntries;
+  }
+
+  async function hasVisibleContent(path: string): Promise<boolean> {
+    const cached = visibleContentCache.get(path);
+    if (cached !== undefined) return cached;
+
+    const entries = await getEntries(path);
+
+    for (const entry of entries) {
+      if (!entry.isDir) {
+        visibleContentCache.set(path, true);
+        return true;
+      }
+
+      if (await hasVisibleContent(entry.path)) {
+        visibleContentCache.set(path, true);
+        return true;
+      }
+    }
+
+    visibleContentCache.set(path, false);
+    return false;
+  }
+
+  // Recursive function to build tree
+  async function printTree(path: string, prefix: string, depth: number): Promise<void> {
+    if (depth > maxDepth) return;
+
+    const entries = await getEntries(path);
+
+    // Separate dirs and files, dirs first
+    const dirEntries: { name: string; path: string; isDir: boolean }[] = [];
+    const fileEntries: { name: string; path: string; isDir: boolean }[] = [];
+
+    for (const entry of entries) {
+      if (entry.isDir) {
+        if (prune && !(await hasVisibleContent(entry.path))) {
+          continue;
+        }
+        dirEntries.push(entry);
+      } else {
+        fileEntries.push(entry);
       }
     }
 
@@ -146,23 +199,14 @@ export const tree: Command = async (ctx) => {
       const entry = sortedEntries[i]!;
       const isLast = i === sortedEntries.length - 1;
       const connector = isLast ? "└── " : "├── ";
-      const entryPath = ctx.fs.resolve(path, entry);
 
-      let isDir = false;
-      try {
-        const entryStat = await ctx.fs.stat(entryPath);
-        isDir = entryStat.isDirectory();
-      } catch {
-        continue;
-      }
+      await ctx.stdout.writeText(prefix + connector + entry.name + "\n");
 
-      await ctx.stdout.writeText(prefix + connector + entry + "\n");
-
-      if (isDir) {
+      if (entry.isDir) {
         dirCount++;
         if (depth < maxDepth) {
           const newPrefix = prefix + (isLast ? "    " : "│   ");
-          await printTree(entryPath, newPrefix, depth + 1);
+          await printTree(entry.path, newPrefix, depth + 1);
         }
       } else {
         fileCount++;

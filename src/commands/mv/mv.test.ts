@@ -34,6 +34,21 @@ describe("mv command", () => {
     expect(vol.existsSync("/file1.txt")).toBe(false);
   });
 
+  test("errors when moving /dev/null as a source", async () => {
+    const result = await sh`mv /dev/null /empty.txt`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("special file");
+    expect(vol.existsSync("/empty.txt")).toBe(false);
+  });
+
+  test("errors when moving a file to /dev/null", async () => {
+    const result = await sh`mv /file1.txt /dev/null`.nothrow();
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("special file");
+    expect(vol.existsSync("/file1.txt")).toBe(true);
+    expect(vol.readFileSync("/file1.txt", "utf8")).toBe("content1");
+  });
+
   test("moves file into directory", async () => {
     await sh`mv /file1.txt /destdir`;
     expect(vol.existsSync("/destdir/file1.txt")).toBe(true);

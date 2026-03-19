@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.32
+
+### Patch Changes
+
+- improve /dev/null handling
+
 ## 0.0.31
 
 ### Patch Changes

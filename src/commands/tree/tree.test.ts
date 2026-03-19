@@ -215,6 +215,11 @@ describe("tree command", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  test("--prune flag is accepted without error", async () => {
+    const result = await sh`tree --prune /mydir`.nothrow();
+    expect(result.exitCode).toBe(0);
+  });
+
   test("--dirsfirst shows directories before files", async () => {
     const result = await sh`tree --dirsfirst /mydir`.text();
     const lines = result.split("\n");
@@ -257,6 +262,21 @@ describe("tree command", () => {
     expect(result).not.toContain("file1.txt");
     expect(result).not.toContain("file2.txt");
     expect(result).not.toContain("nested.txt");
+    expect(result).toContain("subdir");
+    expect(result).toContain("deep");
+  });
+
+  test("--prune removes directories emptied by ignore patterns", async () => {
+    const result = await sh`tree --prune -I '*.txt' /mydir`.text();
+    expect(result).not.toContain("file1.txt");
+    expect(result).not.toContain("file2.txt");
+    expect(result).not.toContain("subdir");
+    expect(result).not.toContain("deep");
+    expect(result).toContain("0 directories, 0 files");
+  });
+
+  test("--prune keeps directories that still contain files with -d", async () => {
+    const result = await sh`tree -d --prune /mydir`.text();
     expect(result).toContain("subdir");
     expect(result).toContain("deep");
   });

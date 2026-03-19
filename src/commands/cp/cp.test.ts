@@ -35,6 +35,18 @@ describe("cp command", () => {
     expect(vol.existsSync("/file1.txt")).toBe(true);
   });
 
+  test("copies /dev/null to an empty file", async () => {
+    await sh`cp /dev/null /empty.txt`;
+    expect(vol.existsSync("/empty.txt")).toBe(true);
+    expect(vol.readFileSync("/empty.txt", "utf8")).toBe("");
+  });
+
+  test("copies file to /dev/null without removing the source", async () => {
+    await sh`cp /file1.txt /dev/null`;
+    expect(vol.existsSync("/file1.txt")).toBe(true);
+    expect(vol.readFileSync("/file1.txt", "utf8")).toBe("content1");
+  });
+
   test("copies file into directory", async () => {
     await sh`cp /file1.txt /destdir`;
     expect(vol.existsSync("/destdir/file1.txt")).toBe(true);

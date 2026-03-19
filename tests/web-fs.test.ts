@@ -48,6 +48,33 @@ describe("WebFileSystem", () => {
       expect(await fs.readFile("/docs/appended-created.txt", "utf8")).toBe("first");
     });
 
+    test("treats /dev/null as an empty file", async () => {
+      const fs = new WebFileSystem(root);
+
+      expect(await fs.readFile("/dev/null", "utf8")).toBe("");
+      expect(await fs.exists("/dev/null")).toBe(true);
+      const stat = await fs.stat("/dev/null");
+      expect(stat.isFile()).toBe(true);
+      expect(stat.isDirectory()).toBe(false);
+      expect(stat.size).toBe(0);
+    });
+
+    test("discards writes to /dev/null", async () => {
+      const fs = new WebFileSystem(root);
+
+      await fs.writeFile("/dev/null", "ignored");
+      await fs.appendFile("/dev/null", "ignored");
+      expect(await fs.exists("/dev")).toBe(false);
+    });
+
+    test("rejects invalid directory and removal operations on /dev/null", async () => {
+      const fs = new WebFileSystem(root);
+
+      await expect(fs.readdir("/dev/null")).rejects.toThrow(/not a directory/);
+      await expect(fs.mkdir("/dev/null")).rejects.toThrow(/file already exists/);
+      await expect(fs.rm("/dev/null")).rejects.toThrow(/operation not permitted/);
+    });
+
     test("supports readdir, stat, exists, and glob", async () => {
       const fs = new WebFileSystem(root);
 

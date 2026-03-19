@@ -2,6 +2,13 @@ import * as path from "path";
 import * as nodeFs from "node:fs/promises";
 import type { VirtualFS, FileStat } from "../types.ts";
 import { globVirtualFS } from "../utils/glob.ts";
+import {
+  discardsSpecialFileWrites,
+  existsSpecialFile,
+  getSpecialPathError,
+  readSpecialFile,
+  statSpecialFile,
+} from "./special-files.ts";
 
 export type Permission = "read-write" | "read-only" | "excluded";
 export type PermissionRules = Record<string, Permission>;
@@ -166,6 +173,10 @@ export class FileSystem implements VirtualFS {
   async readFile(filePath: string): Promise<Buffer>;
   async readFile(filePath: string, encoding: BufferEncoding): Promise<string>;
   async readFile(filePath: string, encoding?: BufferEncoding): Promise<Buffer | string> {
+    const specialContent = readSpecialFile(filePath, encoding);
+    if (specialContent !== undefined) {
+      return specialContent;
+    }
     this.checkPermission(filePath, "read");
     const realPath = this.resolveSafePath(filePath);
     const content = await this.underlyingFs.promises.readFile(realPath);
@@ -174,6 +185,10 @@ export class FileSystem implements VirtualFS {
   }
 
   async readdir(dirPath: string): Promise<string[]> {
+    const specialError = getSpecialPathError(dirPath, "readdir");
+    if (specialError) {
+      throw specialError;
+    }
     this.checkPermission(dirPath, "read");
     const realPath = this.resolveSafePath(dirPath);
     const entries = await this.underlyingFs.promises.readdir(realPath);
@@ -181,6 +196,10 @@ export class FileSystem implements VirtualFS {
   }
 
   async stat(filePath: string): Promise<FileStat> {
+    const specialStat = statSpecialFile(filePath);
+    if (specialStat) {
+      return specialStat;
+    }
     this.checkPermission(filePath, "read");
     const realPath = this.resolveSafePath(filePath);
     const stats = await this.underlyingFs.promises.stat(realPath);
@@ -193,6 +212,10 @@ export class FileSystem implements VirtualFS {
   }
 
   async exists(filePath: string): Promise<boolean> {
+    const specialExists = existsSpecialFile(filePath);
+    if (specialExists !== undefined) {
+      return specialExists;
+    }
     try {
       this.checkPermission(filePath, "read");
       const realPath = this.resolveSafePath(filePath);
@@ -205,24 +228,38 @@ export class FileSystem implements VirtualFS {
 
   // Write operations
   async writeFile(filePath: string, data: Buffer | string): Promise<void> {
+    if (discardsSpecialFileWrites(filePath)) {
+      return;
+    }
     this.checkPermission(filePath, "write");
     const realPath = this.resolveSafePath(filePath);
     await this.underlyingFs.promises.writeFile(realPath, data);
   }
 
   async appendFile(filePath: string, data: Buffer | string): Promise<void> {
+    if (discardsSpecialFileWrites(filePath)) {
+      return;
+    }
     this.checkPermission(filePath, "write");
     const realPath = this.resolveSafePath(filePath);
     await this.underlyingFs.promises.appendFile(realPath, data);
   }
 
   async mkdir(dirPath: string, opts?: { recursive?: boolean }): Promise<void> {
+    const specialError = getSpecialPathError(dirPath, "mkdir");
+    if (specialError) {
+      throw specialError;
+    }
     this.checkPermission(dirPath, "write");
     const realPath = this.resolveSafePath(dirPath);
     await this.underlyingFs.promises.mkdir(realPath, opts);
   }
 
   async rm(filePath: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void> {
+    const specialError = getSpecialPathError(filePath, "rm");
+    if (specialError) {
+      throw specialError;
+    }
     this.checkPermission(filePath, "write");
     const realPath = this.resolveSafePath(filePath);
     await this.underlyingFs.promises.rm(realPath, opts);
