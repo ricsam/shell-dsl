@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.34
+
+### Patch Changes
+
+- add ignore/attributes support to the vcs
+
 ## 0.0.33
 
 ### Patch Changes
