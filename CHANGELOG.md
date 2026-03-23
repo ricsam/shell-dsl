@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.33
+
+### Patch Changes
+
+- add virst version of the vcs
+
 ## 0.0.32
 
 ### Patch Changes

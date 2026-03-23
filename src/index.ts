@@ -90,3 +90,18 @@ export { createStdout, createStderr, createPipe, OutputCollectorImpl, PipeBuffer
 // Utilities
 export { escape, escapeForInterpolation, globVirtualFS } from "./utils/index.ts";
 export type { GlobVirtualFS, GlobOptions } from "./utils/index.ts";
+
+// Version Control
+export { VersionControlSystem } from "./vcs/index.ts";
+export type {
+  VCSConfig,
+  Revision,
+  DiffEntry,
+  TreeManifest,
+  FileEntry,
+  CommitOptions,
+  CheckoutOptions,
+  LogOptions,
+  LogEntry,
+  BranchInfo,
+} from "./vcs/index.ts";

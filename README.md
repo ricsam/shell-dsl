@@ -36,6 +36,7 @@ bun add shell-dsl memfs
 - **Automatic escaping** — Interpolated values are escaped by default for safety
 - **POSIX-inspired syntax** — Pipes, redirects, control flow operators, and more
 - **Streaming pipelines** — Commands communicate via async iteration
+- **Version control** — Built-in VCS with commits, branches, checkout, and diffs on any virtual filesystem
 - **TypeScript-first** — Full type definitions included
 
 ## Getting Started
@@ -745,6 +746,109 @@ const fs = new FileSystem("/", {}, createWebUnderlyingFS(root));
 ```
 
 
+## Version Control
+
+`VersionControlSystem` adds git-like version control to any `VirtualFS`. It tracks changes as diffs, supports branching, and stores metadata in a `.vcs` directory.
+
+```ts
+import { VersionControlSystem, createVirtualFS } from "shell-dsl";
+import { createFsFromVolume, Volume } from "memfs";
+
+const vol = new Volume();
+vol.fromJSON({
+  "/project/src/index.ts": 'console.log("hello")',
+  "/project/README.md": "# My Project",
+});
+const fs = createVirtualFS(createFsFromVolume(vol));
+
+const vcs = new VersionControlSystem({
+  fs,
+  path: "/project",
+});
+```
+
+### Committing Changes
+
+```ts
+// Commit all pending changes
+const rev = await vcs.commit("initial commit");
+
+// Selective commit with glob patterns (relative to root path)
+await vcs.commit("update src only", { paths: ["/src/**"] });
+```
+
+### Checking Status
+
+`status()` returns a `DiffEntry[]` describing uncommitted changes:
+
+```ts
+const changes = await vcs.status();
+for (const entry of changes) {
+  console.log(entry.type, entry.path); // "add" | "modify" | "delete"
+}
+```
+
+### Checkout
+
+```ts
+// Checkout a specific revision (errors if working tree is dirty)
+await vcs.checkout(1);
+
+// Force checkout, discarding uncommitted changes
+await vcs.checkout(1, { force: true });
+
+// Partial checkout — restore specific files without changing HEAD
+await vcs.checkout(1, { paths: ["/src/index.ts", "/**/*.txt"] });
+```
+
+### Branching
+
+```ts
+// Create a branch at HEAD
+await vcs.branch("feature");
+
+// Switch to a branch
+await vcs.checkout("feature");
+
+// List all branches
+const branches = await vcs.branches();
+// [{ name: "main", revision: 1, current: false },
+//  { name: "feature", revision: 1, current: true }]
+```
+
+### History and Diffs
+
+```ts
+// Revision history
+const entries = await vcs.log();
+const filtered = await vcs.log({ path: "src/index.ts", limit: 10 });
+
+// Diff between two revisions
+const diff = await vcs.diff(1, 2);
+for (const entry of diff) {
+  console.log(entry.type, entry.path); // "add" | "modify" | "delete"
+}
+
+// Current HEAD info
+const head = await vcs.head();
+// { branch: "main", revision: 2 }
+```
+
+### Separate VCS Storage
+
+By default, metadata lives in `{path}/.vcs`. You can store it on a different filesystem:
+
+```ts
+const vcs = new VersionControlSystem({
+  fs: workingTreeFs,
+  path: "/project",
+  vcsPath: {
+    fs: metadataFs,          // different VirtualFS instance
+    path: "/meta/.vcs",      // custom location
+  },
+});
+```
+
 ## Low-Level API
 
 For advanced use cases (custom tooling, AST inspection):
@@ -809,6 +913,11 @@ import type {
   Permission,
   PermissionRules,
   UnderlyingFS,
+  VCSConfig,
+  Revision,
+  DiffEntry,
+  LogEntry,
+  BranchInfo,
 } from "shell-dsl";
 ```
 
