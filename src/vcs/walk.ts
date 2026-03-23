@@ -1,37 +1,59 @@
 import type { VirtualFS } from "../types.ts";
 
+interface WalkTreeOptions {
+  enterDirectory?: (relPath: string) => boolean | Promise<boolean>;
+  includeFile?: (relPath: string) => boolean | Promise<boolean>;
+  includeDirectory?: (
+    relPath: string,
+    info: { empty: boolean },
+  ) => boolean | Promise<boolean>;
+}
+
+export interface WalkTreeEntry {
+  path: string;
+  kind: "file" | "directory";
+}
+
 /**
  * Recursively walk a directory tree and return all file paths
- * relative to the given root. Excludes directories whose names
- * match the exclude list.
+ * relative to the given root.
  */
 export async function walkTree(
   fs: VirtualFS,
   root: string,
-  exclude: string[] = [],
+  options: WalkTreeOptions = {},
 ): Promise<string[]> {
-  const results: string[] = [];
-  await walkDir(fs, root, root, exclude, results);
-  return results.sort();
+  const results = await walkTreeEntries(fs, root, options);
+  return results
+    .filter((entry) => entry.kind === "file")
+    .map((entry) => entry.path);
+}
+
+export async function walkTreeEntries(
+  fs: VirtualFS,
+  root: string,
+  options: WalkTreeOptions = {},
+): Promise<WalkTreeEntry[]> {
+  const results: WalkTreeEntry[] = [];
+  await walkDir(fs, root, "", options, results);
+  return results.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 async function walkDir(
   fs: VirtualFS,
-  base: string,
   dir: string,
-  exclude: string[],
-  results: string[],
-): Promise<void> {
+  relativeDir: string,
+  options: WalkTreeOptions,
+  results: WalkTreeEntry[],
+): Promise<boolean> {
   let entries: string[];
   try {
     entries = await fs.readdir(dir);
   } catch {
-    return;
+    return false;
   }
 
   for (const entry of entries) {
-    if (exclude.includes(entry)) continue;
-
     const fullPath = fs.resolve(dir, entry);
     let stat;
     try {
@@ -40,20 +62,23 @@ async function walkDir(
       continue;
     }
 
+    const relative = relativeDir ? `${relativeDir}/${entry}` : entry;
+
     if (stat.isDirectory()) {
-      await walkDir(fs, base, fullPath, exclude, results);
+      if (options.enterDirectory && !(await options.enterDirectory(relative))) {
+        continue;
+      }
+      const empty = await walkDir(fs, fullPath, relative, options, results);
+      if (options.includeDirectory && (await options.includeDirectory(relative, { empty }))) {
+        results.push({ path: relative, kind: "directory" });
+      }
     } else if (stat.isFile()) {
-      // Compute relative path from base
-      const relative = relativePath(base, fullPath);
-      results.push(relative);
+      if (options.includeFile && !(await options.includeFile(relative))) {
+        continue;
+      }
+      results.push({ path: relative, kind: "file" });
     }
   }
-}
 
-function relativePath(base: string, full: string): string {
-  const normalizedBase = base.endsWith("/") ? base : base + "/";
-  if (full.startsWith(normalizedBase)) {
-    return full.slice(normalizedBase.length);
-  }
-  return full;
+  return entries.length === 0;
 }

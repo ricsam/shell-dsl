@@ -1,8 +1,10 @@
 import { test, expect, describe, beforeEach } from "bun:test";
+import { win32 as winPath } from "node:path";
 import { createFsFromVolume, Volume } from "memfs";
 import { createVirtualFS } from "../src/index.ts";
 import { VersionControlSystem } from "../src/vcs/index.ts";
 import type { VirtualFS } from "../src/types.ts";
+import { FileSystem, type UnderlyingFS } from "../src/fs/real-fs.ts";
 
 function createFS(files: Record<string, string> = {}): VirtualFS {
   const vol = new Volume();
@@ -95,6 +97,94 @@ describe("VersionControlSystem", () => {
     });
   });
 
+  describe("ignore rules", () => {
+    test("ignores untracked files in status and full commits", async () => {
+      const ignoredFs = createFS({
+        "/project/README.md": "# My Project",
+        "/project/dist/app.js": "compiled output",
+        "/project/debug.log": "verbose logs",
+      });
+      const ignoredVcs = new VersionControlSystem({
+        fs: ignoredFs,
+        path: "/project",
+        ignore: ["dist", "*.log"],
+      });
+
+      const status = await ignoredVcs.status();
+      expect(status.map((entry) => entry.path)).toEqual(["README.md"]);
+
+      const rev = await ignoredVcs.commit("initial");
+      expect(rev.tree["README.md"]).toBeDefined();
+      expect(rev.tree["dist/app.js"]).toBeUndefined();
+      expect(rev.tree["debug.log"]).toBeUndefined();
+    });
+
+    test("tracked files remain tracked after they match ignore rules", async () => {
+      const trackedFs = createFS({
+        "/project/README.md": "# My Project",
+        "/project/dist/app.js": "compiled output",
+      });
+      const bootstrapVcs = new VersionControlSystem({ fs: trackedFs, path: "/project" });
+      await bootstrapVcs.commit("initial");
+
+      const ignoredVcs = new VersionControlSystem({
+        fs: trackedFs,
+        path: "/project",
+        ignore: ["dist"],
+      });
+
+      await trackedFs.writeFile("/project/dist/app.js", "updated output");
+      const changes = await ignoredVcs.status();
+
+      expect(changes).toHaveLength(1);
+      expect(changes[0]!.path).toBe("dist/app.js");
+      expect(changes[0]!.type).toBe("modify");
+    });
+
+    test("full checkout preserves ignored untracked files", async () => {
+      const ignoredVcs = new VersionControlSystem({
+        fs,
+        path: "/project",
+        ignore: ["*.log"],
+      });
+
+      await ignoredVcs.commit("initial");
+      await fs.writeFile("/project/debug.log", "keep me");
+      await fs.writeFile("/project/README.md", "# Updated");
+      await ignoredVcs.commit("update readme");
+
+      await ignoredVcs.checkout(1);
+
+      expect(await fs.readFile("/project/README.md", "utf8")).toBe("# My Project");
+      expect(await fs.readFile("/project/debug.log", "utf8")).toBe("keep me");
+    });
+
+    test("full checkout still removes tracked files even when they now match ignore rules", async () => {
+      const trackedFs = createFS({
+        "/project/README.md": "# My Project",
+        "/project/dist/app.js": "compiled output",
+      });
+      const bootstrapVcs = new VersionControlSystem({ fs: trackedFs, path: "/project" });
+      await bootstrapVcs.commit("initial");
+
+      const ignoredVcs = new VersionControlSystem({
+        fs: trackedFs,
+        path: "/project",
+        ignore: ["dist"],
+      });
+
+      await trackedFs.rm("/project/dist/app.js");
+      await ignoredVcs.commit("remove build output");
+      expect(await trackedFs.exists("/project/dist/app.js")).toBe(false);
+
+      await ignoredVcs.checkout(1);
+      expect(await trackedFs.exists("/project/dist/app.js")).toBe(true);
+
+      await ignoredVcs.checkout(2);
+      expect(await trackedFs.exists("/project/dist/app.js")).toBe(false);
+    });
+  });
+
   describe("commit", () => {
     test("first commit creates revision 1", async () => {
       const rev = await vcs.commit("initial commit");
@@ -126,7 +216,9 @@ describe("VersionControlSystem", () => {
         "src/utils.ts",
       ]);
       // Verify content is base64 encoded
-      const readmeContent = Buffer.from(rev.tree["README.md"]!.content, "base64").toString();
+      const readmeEntry = rev.tree["README.md"];
+      expect(readmeEntry?.kind).not.toBe("directory");
+      const readmeContent = Buffer.from(readmeEntry!.content!, "base64").toString();
       expect(readmeContent).toBe("# My Project");
     });
 
@@ -168,7 +260,9 @@ describe("VersionControlSystem", () => {
       expect(rev.changes[0]!.path).toBe("src/index.ts");
       // But README.md should still be in tree from parent
       expect(rev.tree["README.md"]).toBeDefined();
-      const readmeContent = Buffer.from(rev.tree["README.md"]!.content, "base64").toString();
+      const readmeEntry = rev.tree["README.md"];
+      expect(readmeEntry?.kind).not.toBe("directory");
+      const readmeContent = Buffer.from(readmeEntry!.content!, "base64").toString();
       expect(readmeContent).toBe("# My Project"); // original content
     });
 
@@ -276,6 +370,18 @@ describe("VersionControlSystem", () => {
       expect(indexContent).toBe('console.log("hello")');
       const utilsContent = await fs.readFile("/project/src/utils.ts", "utf8");
       expect(utilsContent).toBe("export const add = (a: number, b: number) => a + b;");
+    });
+
+    test("partial checkout removes matched files that do not exist in the target revision", async () => {
+      await vcs.commit("initial");
+      await fs.writeFile("/project/src/new.txt", "new file");
+      await vcs.commit("add new file");
+
+      await vcs.checkout(1, { paths: ["/src/**"] });
+
+      expect(await fs.exists("/project/src/new.txt")).toBe(false);
+      const head = await vcs.head();
+      expect(head.revision).toBe(2);
     });
   });
 
@@ -473,6 +579,67 @@ describe("VersionControlSystem", () => {
     });
   });
 
+  describe("attributes", () => {
+    test("diff metadata marks binary entries from attribute rules", async () => {
+      const attributedVcs = new VersionControlSystem({
+        fs,
+        path: "/project",
+        attributes: [{ pattern: "assets/*.png", diff: "binary" }],
+      });
+
+      await attributedVcs.commit("initial");
+      await fs.mkdir("/project/assets", { recursive: true });
+      await fs.writeFile("/project/assets/logo.png", Buffer.from([0, 1, 2, 3]));
+
+      const changes = await attributedVcs.status();
+      const pngEntry = changes.find((entry) => entry.path === "assets/logo.png");
+
+      expect(pngEntry).toBeDefined();
+      expect(pngEntry!.binary).toBe(true);
+      expect(pngEntry!.diff).toBe("binary");
+      expect(pngEntry!.content).toBeDefined();
+    });
+
+    test('diff "none" suppresses diff payloads without affecting stored trees', async () => {
+      const attributedFs = createFS({
+        "/project/README.md": "# My Project",
+        "/project/secrets/token.txt": "secret-1",
+      });
+      const attributedVcs = new VersionControlSystem({
+        fs: attributedFs,
+        path: "/project",
+        attributes: [{ pattern: "secrets/**", diff: "none" }],
+      });
+
+      const first = await attributedVcs.commit("initial");
+      const initialSecretEntry = first.changes.find((entry) => entry.path === "secrets/token.txt");
+      expect(initialSecretEntry).toBeDefined();
+      expect(initialSecretEntry!.diff).toBe("none");
+      expect(initialSecretEntry!.content).toBeUndefined();
+      expect(first.tree["secrets/token.txt"]).toBeDefined();
+
+      await attributedFs.writeFile("/project/secrets/token.txt", "secret-2");
+      const status = await attributedVcs.status();
+      const statusEntry = status.find((entry) => entry.path === "secrets/token.txt");
+      expect(statusEntry).toBeDefined();
+      expect(statusEntry!.content).toBeUndefined();
+      expect(statusEntry!.previousContent).toBeUndefined();
+
+      const second = await attributedVcs.commit("rotate secret");
+      const commitEntry = second.changes.find((entry) => entry.path === "secrets/token.txt");
+      expect(commitEntry).toBeDefined();
+      expect(commitEntry!.content).toBeUndefined();
+      expect(commitEntry!.previousContent).toBeUndefined();
+
+      const diff = await attributedVcs.diff(1, 2);
+      const diffEntry = diff.find((entry) => entry.path === "secrets/token.txt");
+      expect(diffEntry).toBeDefined();
+      expect(diffEntry!.diff).toBe("none");
+      expect(diffEntry!.content).toBeUndefined();
+      expect(diffEntry!.previousContent).toBeUndefined();
+    });
+  });
+
   describe("head", () => {
     test("returns null revision before first commit", async () => {
       const h = await vcs.head();
@@ -543,6 +710,29 @@ describe("VersionControlSystem", () => {
       expect(await workFs.exists("/work/.vcs")).toBe(false);
     });
 
+    test("full checkout preserves custom metadata stored inside the working tree", async () => {
+      const customFs = createFS({
+        "/project/file.txt": "hello",
+      });
+      const customVcs = new VersionControlSystem({
+        fs: customFs,
+        path: "/project",
+        vcsPath: { fs: customFs, path: "/project/history" },
+      });
+
+      await customVcs.commit("initial");
+      await customFs.writeFile("/project/file.txt", "updated");
+      await customVcs.commit("update");
+      await customFs.writeFile("/project/dirty.txt", "discard me");
+
+      await customVcs.checkout(1, { force: true });
+
+      expect(await customFs.exists("/project/history/config.json")).toBe(true);
+      expect(await customFs.exists("/project/history/counter.json")).toBe(true);
+      expect(await customFs.exists("/project/history/revisions/1.json")).toBe(true);
+      await expect(customVcs.status()).resolves.toEqual([]);
+    });
+
     test("checkout creates directories for restored files", async () => {
       await vcs.commit("initial");
       await fs.rm("/project/src/index.ts");
@@ -556,6 +746,30 @@ describe("VersionControlSystem", () => {
       expect(await fs.exists("/project/src/index.ts")).toBe(true);
       const content = await fs.readFile("/project/src/index.ts", "utf8");
       expect(content).toBe('console.log("hello")');
+    });
+
+    test("tracks empty directories through commit and checkout", async () => {
+      await vcs.commit("initial");
+      await fs.mkdir("/project/src/empty", { recursive: true });
+
+      const status = await vcs.status();
+      const emptyDir = status.find((entry) => entry.path === "src/empty");
+      expect(emptyDir).toBeDefined();
+      expect(emptyDir!.type).toBe("add");
+      expect(emptyDir!.entryKind).toBe("directory");
+
+      const addEmptyDir = await vcs.commit("add empty dir");
+      expect(addEmptyDir.tree["src/empty"]?.kind).toBe("directory");
+
+      await fs.rm("/project/src/empty", { recursive: true });
+      const removeEmptyDir = await vcs.commit("remove empty dir");
+      expect(removeEmptyDir.changes.find((entry) => entry.path === "src/empty")!.type).toBe("delete");
+
+      await vcs.checkout(2, { force: true });
+
+      expect(await fs.exists("/project/src/empty")).toBe(true);
+      const stat = await fs.stat("/project/src/empty");
+      expect(stat.isDirectory()).toBe(true);
     });
 
     test("multiple branches diverge independently", async () => {
@@ -587,5 +801,81 @@ describe("VersionControlSystem", () => {
       expect(await fs.exists("/project/a.txt")).toBe(false);
       expect(await fs.exists("/project/b.txt")).toBe(false);
     });
+
+    test("uses repo-relative paths on Windows-style filesystems", async () => {
+      const windowsFs = createWindowsFS({
+        "C:\\project\\README.md": "# My Project",
+        "C:\\project\\src\\index.ts": 'console.log("hello")',
+      });
+      const windowsVcs = new VersionControlSystem({
+        fs: windowsFs,
+        path: "C:\\project",
+      });
+
+      const initialStatus = await windowsVcs.status();
+      expect(initialStatus.map((entry) => entry.path).sort()).toEqual([
+        "README.md",
+        "src/index.ts",
+      ]);
+
+      await windowsVcs.commit("initial");
+      await windowsFs.writeFile("C:\\project\\src\\new.txt", "new");
+
+      const changes = await windowsVcs.status();
+      expect(changes.find((entry) => entry.path === "src/new.txt")?.type).toBe("add");
+
+      await windowsVcs.checkout(1, { force: true });
+      expect(await windowsFs.exists("C:\\project\\src\\new.txt")).toBe(false);
+    });
   });
 });
+
+function createWindowsFS(files: Record<string, string>): VirtualFS {
+  const vol = Volume.fromJSON(Object.fromEntries(
+    Object.entries(files).map(([filePath, content]) => [toVolumePath(filePath), content]),
+  ));
+  const basePromises = (createFsFromVolume(vol) as any).promises;
+  const underlyingFs: UnderlyingFS = {
+    pathOps: {
+      separator: "\\",
+      resolve: (...paths: string[]) => winPath.resolve(...paths),
+      normalize: (filePath: string) => winPath.normalize(filePath),
+      join: (...paths: string[]) => winPath.join(...paths),
+      relative: (from: string, to: string) => winPath.relative(from, to),
+      isAbsolute: (filePath: string) => winPath.isAbsolute(filePath),
+      dirname: (filePath: string) => winPath.dirname(filePath),
+      basename: (filePath: string) => winPath.basename(filePath),
+    },
+    promises: {
+      readFile: (filePath: string) => basePromises.readFile(toVolumePath(filePath)),
+      readdir: (dirPath: string) => basePromises.readdir(toVolumePath(dirPath)),
+      stat: (filePath: string) => basePromises.stat(toVolumePath(filePath)),
+      writeFile: (filePath: string, data: Buffer | string) =>
+        basePromises.writeFile(toVolumePath(filePath), data),
+      appendFile: (filePath: string, data: Buffer | string) =>
+        basePromises.appendFile(toVolumePath(filePath), data),
+      mkdir: (dirPath: string, opts?: { recursive?: boolean }) =>
+        basePromises.mkdir(toVolumePath(dirPath), opts),
+      rm: async (filePath: string, opts?: { recursive?: boolean; force?: boolean }) => {
+        try {
+          const stats = await basePromises.stat(toVolumePath(filePath));
+          if (stats.isDirectory()) {
+            await basePromises.rmdir(toVolumePath(filePath), { recursive: opts?.recursive });
+          } else {
+            await basePromises.unlink(toVolumePath(filePath));
+          }
+        } catch (error) {
+          if (!opts?.force) throw error;
+        }
+      },
+    },
+  };
+
+  return new FileSystem(undefined, {}, underlyingFs);
+}
+
+function toVolumePath(filePath: string): string {
+  const withoutDrive = filePath.replace(/^[A-Za-z]:/, "");
+  const normalized = withoutDrive.replace(/\\/g, "/");
+  return normalized || "/";
+}

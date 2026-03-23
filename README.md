@@ -750,6 +750,8 @@ const fs = new FileSystem("/", {}, createWebUnderlyingFS(root));
 
 `VersionControlSystem` adds git-like version control to any `VirtualFS`. It tracks changes as diffs, supports branching, and stores metadata in a `.vcs` directory.
 
+Ignore and attribute rules are configured directly on the constructor:
+
 ```ts
 import { VersionControlSystem, createVirtualFS } from "shell-dsl";
 import { createFsFromVolume, Volume } from "memfs";
@@ -764,8 +766,24 @@ const fs = createVirtualFS(createFsFromVolume(vol));
 const vcs = new VersionControlSystem({
   fs,
   path: "/project",
+  ignore: ["dist", "*.log"],
+  attributes: [
+    { pattern: "assets/*.png", diff: "binary" },
+    { pattern: "secrets/**", diff: "none" },
+  ],
 });
 ```
+
+Ignore patterns apply only to untracked paths:
+
+- Ignored untracked files are skipped by `status()` and full `commit()`
+- Files already tracked by VCS remain tracked even if they later match an ignore rule
+- Full `checkout()` preserves ignored untracked files
+
+Attribute rules are applied in declaration order, with later matches winning. Supported properties:
+
+- `binary?: boolean`
+- `diff?: "text" | "binary" | "none"`
 
 ### Committing Changes
 
@@ -784,9 +802,12 @@ await vcs.commit("update src only", { paths: ["/src/**"] });
 ```ts
 const changes = await vcs.status();
 for (const entry of changes) {
-  console.log(entry.type, entry.path); // "add" | "modify" | "delete"
+  console.log(entry.type, entry.path, entry.diff, entry.binary);
+  // "add" | "modify" | "delete", "text" | "binary" | "none", boolean
 }
 ```
+
+When `diff` is `"none"`, the entry still reports the path and change type, but omits `content` and `previousContent`.
 
 ### Checkout
 
@@ -826,7 +847,7 @@ const filtered = await vcs.log({ path: "src/index.ts", limit: 10 });
 // Diff between two revisions
 const diff = await vcs.diff(1, 2);
 for (const entry of diff) {
-  console.log(entry.type, entry.path); // "add" | "modify" | "delete"
+  console.log(entry.type, entry.path, entry.diff);
 }
 
 // Current HEAD info

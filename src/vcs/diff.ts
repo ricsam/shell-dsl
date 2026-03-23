@@ -1,6 +1,7 @@
 import type { VirtualFS } from "../types.ts";
-import type { TreeManifest, DiffEntry } from "./types.ts";
-import { walkTree } from "./walk.ts";
+import type { TreeManifest, DiffEntry, TreeEntry } from "./types.ts";
+import { VCSRules } from "./rules.ts";
+import { buildTreeManifest } from "./snapshot.ts";
 
 /**
  * Compute diff entries between two tree manifests.
@@ -8,6 +9,7 @@ import { walkTree } from "./walk.ts";
 export function diffManifests(
   before: TreeManifest,
   after: TreeManifest,
+  rules: VCSRules = new VCSRules(),
 ): DiffEntry[] {
   const entries: DiffEntry[] = [];
   const allPaths = new Set([...Object.keys(before), ...Object.keys(after)]);
@@ -17,16 +19,11 @@ export function diffManifests(
     const curr = after[path];
 
     if (!prev && curr) {
-      entries.push({ type: "add", path, content: curr.content });
+      entries.push(createDiffEntry("add", path, curr, undefined, rules));
     } else if (prev && !curr) {
-      entries.push({ type: "delete", path, previousContent: prev.content });
-    } else if (prev && curr && prev.content !== curr.content) {
-      entries.push({
-        type: "modify",
-        path,
-        content: curr.content,
-        previousContent: prev.content,
-      });
+      entries.push(createDiffEntry("delete", path, undefined, prev, rules));
+    } else if (prev && curr && !entriesEqual(prev, curr)) {
+      entries.push(createDiffEntry("modify", path, curr, prev, rules));
     }
   }
 
@@ -40,41 +37,56 @@ export async function diffWorkingTree(
   fs: VirtualFS,
   rootPath: string,
   manifest: TreeManifest,
-  exclude: string[] = [],
+  rules: VCSRules = new VCSRules({ internalDirName: ".vcs" }),
 ): Promise<DiffEntry[]> {
-  const entries: DiffEntry[] = [];
-  const workingFiles = await walkTree(fs, rootPath, exclude);
-  const manifestPaths = new Set(Object.keys(manifest));
-  const seenPaths = new Set<string>();
+  const workingManifest = await buildTreeManifest(fs, rootPath, {
+    rules,
+    trackedPaths: Object.keys(manifest),
+  });
+  return diffManifests(manifest, workingManifest, rules);
+}
 
-  for (const relPath of workingFiles) {
-    seenPaths.add(relPath);
-    const fullPath = fs.resolve(rootPath, relPath);
-    const content = await fs.readFile(fullPath);
-    const b64 = Buffer.from(content).toString("base64");
+function createDiffEntry(
+  type: DiffEntry["type"],
+  path: string,
+  current: TreeEntry | undefined,
+  previous: TreeEntry | undefined,
+  rules: VCSRules,
+): DiffEntry {
+  const attributes = rules.resolveAttributes(path);
+  const entryKind = getEntryKind(current ?? previous);
+  const previousEntryKind = previous ? getEntryKind(previous) : undefined;
+  const entry: DiffEntry = {
+    type,
+    path,
+    binary: attributes.binary,
+    diff: attributes.diff,
+    entryKind,
+    previousEntryKind,
+  };
 
-    const prev = manifest[relPath];
-    if (!prev) {
-      entries.push({ type: "add", path: relPath, content: b64 });
-    } else if (prev.content !== b64) {
-      entries.push({
-        type: "modify",
-        path: relPath,
-        content: b64,
-        previousContent: prev.content,
-      });
+  if (attributes.diff !== "none") {
+    if (isFileEntry(current)) {
+      entry.content = current.content;
+    }
+    if (isFileEntry(previous)) {
+      entry.previousContent = previous.content;
     }
   }
 
-  for (const manifestPath of manifestPaths) {
-    if (!seenPaths.has(manifestPath)) {
-      entries.push({
-        type: "delete",
-        path: manifestPath,
-        previousContent: manifest[manifestPath]!.content,
-      });
-    }
-  }
+  return entry;
+}
 
-  return entries.sort((a, b) => a.path.localeCompare(b.path));
+function entriesEqual(a: TreeEntry, b: TreeEntry): boolean {
+  if (getEntryKind(a) !== getEntryKind(b)) return false;
+  if (!isFileEntry(a) || !isFileEntry(b)) return true;
+  return a.content === b.content;
+}
+
+function getEntryKind(entry: TreeEntry | undefined): "file" | "directory" {
+  return entry?.kind === "directory" ? "directory" : "file";
+}
+
+function isFileEntry(entry: TreeEntry | undefined): entry is Extract<TreeEntry, { kind?: "file" }> {
+  return !!entry && entry.kind !== "directory";
 }

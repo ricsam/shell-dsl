@@ -12,14 +12,15 @@ import type {
 } from "./types.ts";
 import { VCSStorage } from "./storage.ts";
 import { diffManifests, diffWorkingTree } from "./diff.ts";
+import { matchVCSPath, VCSRules } from "./rules.ts";
 import { buildTreeManifest, restoreTree } from "./snapshot.ts";
-import { matchGlobPath } from "./match.ts";
 
 export class VersionControlSystem {
   private readonly workFs: VirtualFS;
   private readonly workPath: string;
   private readonly storage: VCSStorage;
-  private readonly vcsDirName: string;
+  private readonly vcsInternalPath: string;
+  private readonly rules: VCSRules;
 
   constructor(config: VCSConfig) {
     this.workFs = config.fs;
@@ -29,20 +30,13 @@ export class VersionControlSystem {
     const metaPath = config.vcsPath?.path ?? metaFs.resolve(config.path, ".vcs");
     this.storage = new VCSStorage(metaFs, metaPath);
 
-    // Determine the vcs directory name relative to workPath for exclusion
-    const resolvedMeta = metaFs.resolve(metaPath);
-    const resolvedWork = this.workPath;
-    if (resolvedMeta.startsWith(resolvedWork + "/") || resolvedMeta.startsWith(resolvedWork + "\\")) {
-      const rel = resolvedMeta.slice(resolvedWork.length + 1);
-      this.vcsDirName = rel.split("/")[0] ?? ".vcs";
-    } else {
-      // VCS dir is outside the work tree, no exclusion needed
-      this.vcsDirName = "";
-    }
-  }
+    this.vcsInternalPath = resolveInternalPath(config.fs, metaFs, this.workPath, metaPath);
 
-  private get excludeDirs(): string[] {
-    return this.vcsDirName ? [this.vcsDirName] : [];
+    this.rules = new VCSRules({
+      internalPath: this.vcsInternalPath,
+      ignore: config.ignore,
+      attributes: config.attributes,
+    });
   }
 
   /** Initialize the .vcs directory. Called automatically on first operation if needed. */
@@ -93,7 +87,10 @@ export class VersionControlSystem {
 
     if (opts?.paths && opts.paths.length > 0) {
       // Selective commit: only include matching files
-      const fullManifest = await buildTreeManifest(this.workFs, this.workPath, this.excludeDirs);
+      const fullManifest = await buildTreeManifest(this.workFs, this.workPath, {
+        rules: this.rules,
+        trackedPaths: Object.keys(parentManifest),
+      });
       const matchedPaths = filterPathsByGlobs(Object.keys(fullManifest), opts.paths);
 
       // Start with parent manifest, overlay matched files from working tree
@@ -119,11 +116,14 @@ export class VersionControlSystem {
         if (parentManifest[p]) relevantBefore[p] = parentManifest[p]!;
         if (newTree[p]) relevantAfter[p] = newTree[p]!;
       }
-      changes = diffManifests(relevantBefore, relevantAfter);
+      changes = diffManifests(relevantBefore, relevantAfter, this.rules);
     } else {
       // Full commit
-      newTree = await buildTreeManifest(this.workFs, this.workPath, this.excludeDirs);
-      changes = diffManifests(parentManifest, newTree);
+      newTree = await buildTreeManifest(this.workFs, this.workPath, {
+        rules: this.rules,
+        trackedPaths: Object.keys(parentManifest),
+      });
+      changes = diffManifests(parentManifest, newTree, this.rules);
     }
 
     if (changes.length === 0) {
@@ -183,16 +183,15 @@ export class VersionControlSystem {
       throw new Error(`revision ${targetRevision} not found`);
     }
 
+    const currentManifest = await this.headManifest();
+
     if (isPartial) {
       // Partial checkout: restore specific files, don't update HEAD
-      const matchedPaths = filterPathsByGlobs(Object.keys(rev.tree), opts!.paths!);
-      const filteredManifest: TreeManifest = {};
-      for (const p of matchedPaths) {
-        filteredManifest[p] = rev.tree[p]!;
-      }
-      await restoreTree(this.workFs, this.workPath, filteredManifest, {
+      await restoreTree(this.workFs, this.workPath, rev.tree, {
         fullRestore: false,
-        paths: matchedPaths,
+        paths: opts!.paths!,
+        rules: this.rules,
+        trackedPaths: Object.keys(currentManifest),
       });
     } else {
       // Full checkout
@@ -203,7 +202,11 @@ export class VersionControlSystem {
         }
       }
 
-      await restoreTree(this.workFs, this.workPath, rev.tree, { fullRestore: true });
+      await restoreTree(this.workFs, this.workPath, rev.tree, {
+        fullRestore: true,
+        rules: this.rules,
+        trackedPaths: Object.keys(currentManifest),
+      });
 
       // Update HEAD
       if (targetBranch) {
@@ -287,7 +290,7 @@ export class VersionControlSystem {
 
       if (opts?.path) {
         // Filter: only include if this revision touches the specified path
-        const matchesPath = changedPaths.some((p) => matchGlobPath(opts.path!, p));
+        const matchesPath = changedPaths.some((p) => matchVCSPath(opts.path!, p));
         if (matchesPath) {
           entries.push({
             id: rev.id,
@@ -319,7 +322,7 @@ export class VersionControlSystem {
   async status(): Promise<DiffEntry[]> {
     await this.ensureInit();
     const manifest = await this.headManifest();
-    return diffWorkingTree(this.workFs, this.workPath, manifest, this.excludeDirs);
+    return diffWorkingTree(this.workFs, this.workPath, manifest, this.rules);
   }
 
   /** Diff between two revisions. */
@@ -327,7 +330,7 @@ export class VersionControlSystem {
     await this.ensureInit();
     const a = await this.storage.readRevision(revA);
     const b = await this.storage.readRevision(revB);
-    return diffManifests(a.tree, b.tree);
+    return diffManifests(a.tree, b.tree, this.rules);
   }
 
   /** Get current HEAD info. */
@@ -342,8 +345,28 @@ export class VersionControlSystem {
  * Patterns may start with `/` which is stripped before matching.
  */
 function filterPathsByGlobs(paths: string[], patterns: string[]): string[] {
-  const normalizedPatterns = patterns.map((p) => (p.startsWith("/") ? p.slice(1) : p));
   return paths.filter((filePath) =>
-    normalizedPatterns.some((pattern) => matchGlobPath(pattern, filePath)),
+    patterns.some((pattern) => matchVCSPath(pattern, filePath)),
   );
+}
+
+function resolveInternalPath(
+  workFs: VirtualFS,
+  metaFs: VirtualFS,
+  workPath: string,
+  metaPath: string,
+): string {
+  if (workFs !== metaFs) return "";
+
+  const normalizedWork = normalizeFsPath(workPath);
+  const normalizedMeta = normalizeFsPath(metaFs.resolve(metaPath));
+
+  if (normalizedMeta === normalizedWork) return "";
+  if (!normalizedMeta.startsWith(`${normalizedWork}/`)) return "";
+
+  return normalizedMeta.slice(normalizedWork.length + 1);
+}
+
+function normalizeFsPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
 }

@@ -7,6 +7,10 @@ export interface VCSConfig {
   fs: VirtualFS;
   /** Root path of the working tree */
   path: string;
+  /** Glob-style patterns for untracked paths that VCS should ignore */
+  ignore?: string[];
+  /** Path attribute rules applied in declaration order, with later matches winning */
+  attributes?: VCSAttributeRule[];
   /** Optional separate storage for VCS metadata */
   vcsPath?: {
     /** Filesystem for metadata storage (defaults to config.fs) */
@@ -38,19 +42,45 @@ export interface VCSConfigFile {
 // === Tree manifest ===
 
 export interface FileEntry {
+  kind?: "file";
   content: string; // base64-encoded
   size: number;
 }
 
+export interface DirectoryEntry {
+  kind: "directory";
+  size: 0;
+  content?: undefined;
+}
+
+export type TreeEntry = FileEntry | DirectoryEntry;
+
 export interface TreeManifest {
-  [path: string]: FileEntry;
+  [path: string]: TreeEntry;
 }
 
 // === Diff ===
 
+export type VCSDiffMode = "text" | "binary" | "none";
+
+export interface VCSAttributeRule {
+  pattern: string;
+  binary?: boolean;
+  diff?: VCSDiffMode;
+}
+
+export interface VCSResolvedAttributes {
+  binary: boolean;
+  diff: VCSDiffMode;
+}
+
 export interface DiffEntry {
   type: "add" | "modify" | "delete";
   path: string;
+  binary: boolean;
+  diff: VCSDiffMode;
+  entryKind?: "file" | "directory";
+  previousEntryKind?: "file" | "directory";
   content?: string; // base64, for add/modify
   previousContent?: string; // base64, for modify
 }
