@@ -1,13 +1,21 @@
 // Virtual Filesystem Interface
+export interface VirtualFSWritable {
+  write(chunk: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort?(reason?: unknown): Promise<void>;
+}
+
 export interface VirtualFS {
   readFile(path: string): Promise<Buffer>;
   readFile(path: string, encoding: BufferEncoding): Promise<string>;
+  readStream(path: string): AsyncIterable<Uint8Array>;
   readdir(path: string): Promise<string[]>;
   stat(path: string): Promise<FileStat>;
   exists(path: string): Promise<boolean>;
 
   writeFile(path: string, data: Buffer | string): Promise<void>;
   appendFile(path: string, data: Buffer | string): Promise<void>;
+  writeStream(path: string, opts?: { append?: boolean }): Promise<VirtualFSWritable>;
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
 
   rm(path: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void>;
@@ -23,6 +31,7 @@ export interface FileStat {
   isDirectory(): boolean;
   size: number;
   mtime: Date;
+  mtimeMs: number;
 }
 
 // Command Interfaces

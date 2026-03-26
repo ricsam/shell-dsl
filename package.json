@@ -1,6 +1,6 @@
 {
   "name": "shell-dsl",
-  "version": "0.0.34",
+  "version": "0.0.35",
   "description": "A sandboxed shell-style DSL for running scriptable command pipelines in-process without host OS access",
   "module": "index.ts",
   "type": "module",
@@ -27,7 +27,9 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build:npm": "bun scripts/build.ts"
+    "build:npm": "bun scripts/build.ts",
+    "bench:vcs-large-files": "bun scripts/vcs-large-file-benchmark.ts",
+    "profile:vcs-status": "bun scripts/vcs-status-profile.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -36,5 +38,8 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.0.1"
   }
 }

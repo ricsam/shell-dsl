@@ -1,11 +1,12 @@
 import type { IFs } from "memfs";
-import type { VirtualFS, FileStat } from "../types.ts";
+import type { VirtualFS, VirtualFSWritable, FileStat } from "../types.ts";
 import * as pathModule from "path";
 import { globVirtualFS } from "../utils/glob.ts";
 import {
   discardsSpecialFileWrites,
   existsSpecialFile,
   getSpecialPathError,
+  isDevNullPath,
   readSpecialFile,
   statSpecialFile,
 } from "./special-files.ts";
@@ -21,6 +22,18 @@ export function createVirtualFS(memfs: IFs): VirtualFS {
       const buf = Buffer.from(content);
       return encoding ? buf.toString(encoding) : buf;
     }) as VirtualFS["readFile"],
+
+    readStream(path: string): AsyncIterable<Uint8Array> {
+      if (isDevNullPath(path)) {
+        return emptyIterable();
+      }
+      return {
+        async *[Symbol.asyncIterator]() {
+          const content = await fs.readFile(path);
+          yield Buffer.from(content);
+        },
+      };
+    },
 
     async readdir(path: string): Promise<string[]> {
       const specialError = getSpecialPathError(path, "readdir");
@@ -38,6 +51,7 @@ export function createVirtualFS(memfs: IFs): VirtualFS {
         isDirectory: () => stats.isDirectory(),
         size: Number(stats.size),
         mtime: new Date(stats.mtime),
+        mtimeMs: Number((stats as { mtimeMs?: number }).mtimeMs ?? stats.mtime),
       };
     },
 
@@ -64,6 +78,38 @@ export function createVirtualFS(memfs: IFs): VirtualFS {
         return;
       }
       await fs.appendFile(path, data);
+    },
+
+    async writeStream(path: string, opts?: { append?: boolean }): Promise<VirtualFSWritable> {
+      if (discardsSpecialFileWrites(path)) {
+        return createDiscardingWritable();
+      }
+
+      const chunks: Uint8Array[] = [];
+      let closed = false;
+
+      return {
+        async write(chunk: Uint8Array): Promise<void> {
+          if (closed) {
+            throw new Error("stream is closed");
+          }
+          chunks.push(Buffer.from(chunk));
+        },
+        async close(): Promise<void> {
+          if (closed) return;
+          closed = true;
+          const data = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+          if (opts?.append) {
+            await fs.appendFile(path, data);
+          } else {
+            await fs.writeFile(path, data);
+          }
+        },
+        async abort(_reason?: unknown): Promise<void> {
+          closed = true;
+          chunks.length = 0;
+        },
+      };
     },
 
     async mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
@@ -111,5 +157,19 @@ export function createVirtualFS(memfs: IFs): VirtualFS {
         { cwd }
       );
     },
+  };
+}
+
+function emptyIterable(): AsyncIterable<Uint8Array> {
+  return {
+    async *[Symbol.asyncIterator]() {},
+  };
+}
+
+function createDiscardingWritable(): VirtualFSWritable {
+  return {
+    async write(_chunk: Uint8Array): Promise<void> {},
+    async close(): Promise<void> {},
+    async abort(_reason?: unknown): Promise<void> {},
   };
 }

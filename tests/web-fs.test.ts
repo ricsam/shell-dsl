@@ -48,6 +48,22 @@ describe("WebFileSystem", () => {
       expect(await fs.readFile("/docs/appended-created.txt", "utf8")).toBe("first");
     });
 
+    test("streams file reads and writes", async () => {
+      const fs = new WebFileSystem(root);
+
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of fs.readStream("/docs/readme.txt")) {
+        chunks.push(chunk);
+      }
+      expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString()).toBe("hello");
+
+      const writer = await fs.writeStream("/docs/streamed.txt");
+      await writer.write(encoder.encode("streamed "));
+      await writer.write(encoder.encode("content"));
+      await writer.close();
+      expect(await fs.readFile("/docs/streamed.txt", "utf8")).toBe("streamed content");
+    });
+
     test("treats /dev/null as an empty file", async () => {
       const fs = new WebFileSystem(root);
 
@@ -312,6 +328,16 @@ class FakeFile {
     const out = new Uint8Array(this.node.data.length);
     out.set(this.node.data);
     return out.buffer;
+  }
+
+  stream(): ReadableStream<Uint8Array> {
+    const data = this.node.data.slice();
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(data);
+        controller.close();
+      },
+    });
   }
 }
 

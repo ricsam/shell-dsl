@@ -748,7 +748,7 @@ const fs = new FileSystem("/", {}, createWebUnderlyingFS(root));
 
 ## Version Control
 
-`VersionControlSystem` adds git-like version control to any `VirtualFS`. It tracks changes as diffs, supports branching, and stores metadata in a `.vcs` directory.
+`VersionControlSystem` adds git-like version control to any `VirtualFS`. It tracks revisions as lightweight tree manifests, stores file bytes in a content-addressed blob store under `.vcs`, and supports branching, checkout, and metadata-plus-patch diffs.
 
 Ignore and attribute rules are configured directly on the constructor:
 
@@ -780,7 +780,7 @@ Ignore patterns apply only to untracked paths:
 - Files already tracked by VCS remain tracked even if they later match an ignore rule
 - Full `checkout()` preserves ignored untracked files
 
-Attribute rules are applied in declaration order, with later matches winning. Supported properties:
+Attribute rules are applied in declaration order, with later matches winning. By default, VCS auto-detects text vs binary content from the file bytes and only generates unified text patches for text files up to 1 MiB. Supported properties:
 
 - `binary?: boolean`
 - `diff?: "text" | "binary" | "none"`
@@ -804,10 +804,17 @@ const changes = await vcs.status();
 for (const entry of changes) {
   console.log(entry.type, entry.path, entry.diff, entry.binary);
   // "add" | "modify" | "delete", "text" | "binary" | "none", boolean
+
+  if (entry.patch) {
+    console.log(entry.patch);
+  } else {
+    console.log(entry.patchSuppressedReason);
+    // "binary" | "none" | "too-large"
+  }
 }
 ```
 
-When `diff` is `"none"`, the entry still reports the path and change type, but omits `content` and `previousContent`.
+Each file entry includes `blobId` and `previousBlobId` when applicable. Text diffs are returned as unified patches in `patch`; binary files, `diff: "none"` paths, and oversized text files return metadata only with `patchSuppressedReason`.
 
 ### Checkout
 
@@ -850,10 +857,16 @@ for (const entry of diff) {
   console.log(entry.type, entry.path, entry.diff);
 }
 
+// Read stored file bytes lazily
+const readme = await vcs.readRevisionFile(2, "README.md", "utf8");
+const blob = await vcs.readBlob(diff[0]!.blobId!);
+
 // Current HEAD info
 const head = await vcs.head();
 // { branch: "main", revision: 2 }
 ```
+
+Blob objects are deduplicated by SHA-256, so replacing a large file stores a new blob only when the content changes instead of embedding the full file in every revision record.
 
 ### Separate VCS Storage
 

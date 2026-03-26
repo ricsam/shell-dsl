@@ -3,7 +3,7 @@ import { win32 as winPath } from "node:path";
 import { createFsFromVolume, Volume } from "memfs";
 import { createVirtualFS } from "../src/index.ts";
 import { VersionControlSystem } from "../src/vcs/index.ts";
-import type { VirtualFS } from "../src/types.ts";
+import type { VirtualFS, VirtualFSWritable } from "../src/types.ts";
 import { FileSystem, type UnderlyingFS } from "../src/fs/real-fs.ts";
 
 function createFS(files: Record<string, string> = {}): VirtualFS {
@@ -31,12 +31,14 @@ describe("VersionControlSystem", () => {
       expect(await fs.exists("/project/.vcs/HEAD")).toBe(true);
       expect(await fs.exists("/project/.vcs/config.json")).toBe(true);
       expect(await fs.exists("/project/.vcs/counter.json")).toBe(true);
+      expect(await fs.exists("/project/.vcs/index.json")).toBe(true);
     });
 
     test("init is idempotent", async () => {
       await vcs.init();
       await vcs.init();
       const config = JSON.parse(await fs.readFile("/project/.vcs/config.json", "utf8"));
+      expect(config.version).toBe(2);
       expect(config.defaultBranch).toBe("main");
     });
 
@@ -215,10 +217,10 @@ describe("VersionControlSystem", () => {
         "src/index.ts",
         "src/utils.ts",
       ]);
-      // Verify content is base64 encoded
       const readmeEntry = rev.tree["README.md"];
-      expect(readmeEntry?.kind).not.toBe("directory");
-      const readmeContent = Buffer.from(readmeEntry!.content!, "base64").toString();
+      const readmeFile = getFileEntry(rev.tree, "README.md");
+      expect(readmeFile.blobId).toBeDefined();
+      const readmeContent = await vcs.readRevisionFile(rev.id, "README.md", "utf8");
       expect(readmeContent).toBe("# My Project");
     });
 
@@ -255,15 +257,13 @@ describe("VersionControlSystem", () => {
       await fs.writeFile("/project/src/index.ts", "updated");
       await fs.writeFile("/project/README.md", "also updated");
       const rev = await vcs.commit("only src", { paths: ["/src/**"] });
-      // Only src/index.ts should be in changes
       expect(rev.changes.length).toBe(1);
       expect(rev.changes[0]!.path).toBe("src/index.ts");
-      // But README.md should still be in tree from parent
       expect(rev.tree["README.md"]).toBeDefined();
-      const readmeEntry = rev.tree["README.md"];
-      expect(readmeEntry?.kind).not.toBe("directory");
-      const readmeContent = Buffer.from(readmeEntry!.content!, "base64").toString();
-      expect(readmeContent).toBe("# My Project"); // original content
+      const readmeFile = getFileEntry(rev.tree, "README.md");
+      expect(readmeFile.blobId).toBeDefined();
+      const readmeContent = await vcs.readRevisionFile(rev.id, "README.md", "utf8");
+      expect(readmeContent).toBe("# My Project");
     });
 
     test("selective commit with specific file path", async () => {
@@ -547,7 +547,7 @@ describe("VersionControlSystem", () => {
       expect(changeMap.get("src/utils.ts")).toBe("delete");
     });
 
-    test("diff includes content for add/modify", async () => {
+    test("diff includes blob ids and unified text patches", async () => {
       await vcs.commit("initial");
       await fs.writeFile("/project/new.txt", "hello");
       await vcs.commit("add file");
@@ -555,21 +555,22 @@ describe("VersionControlSystem", () => {
       const entries = await vcs.diff(1, 2);
       const addEntry = entries.find((e) => e.path === "new.txt");
       expect(addEntry).toBeDefined();
-      expect(addEntry!.content).toBeDefined();
-      const decoded = Buffer.from(addEntry!.content!, "base64").toString();
-      expect(decoded).toBe("hello");
+      expect(addEntry!.blobId).toBeDefined();
+      expect(addEntry!.patch).toContain("+hello");
+      expect(await vcs.readBlob(addEntry!.blobId!, "utf8")).toBe("hello");
     });
 
-    test("diff includes previousContent for modify/delete", async () => {
+    test("diff includes previous blob ids for modify/delete", async () => {
       await vcs.commit("initial");
       await fs.writeFile("/project/README.md", "# Updated");
       await vcs.commit("update");
 
       const entries = await vcs.diff(1, 2);
       const modEntry = entries.find((e) => e.path === "README.md");
-      expect(modEntry!.previousContent).toBeDefined();
-      const prev = Buffer.from(modEntry!.previousContent!, "base64").toString();
-      expect(prev).toBe("# My Project");
+      expect(modEntry!.previousBlobId).toBeDefined();
+      expect(modEntry!.patch).toContain("-# My Project");
+      expect(modEntry!.patch).toContain("+# Updated");
+      expect(await vcs.readBlob(modEntry!.previousBlobId!, "utf8")).toBe("# My Project");
     });
 
     test("diff with no changes returns empty array", async () => {
@@ -597,7 +598,9 @@ describe("VersionControlSystem", () => {
       expect(pngEntry).toBeDefined();
       expect(pngEntry!.binary).toBe(true);
       expect(pngEntry!.diff).toBe("binary");
-      expect(pngEntry!.content).toBeDefined();
+      expect(pngEntry!.blobId).toBeDefined();
+      expect(pngEntry!.patch).toBeUndefined();
+      expect(pngEntry!.patchSuppressedReason).toBe("binary");
     });
 
     test('diff "none" suppresses diff payloads without affecting stored trees', async () => {
@@ -615,28 +618,119 @@ describe("VersionControlSystem", () => {
       const initialSecretEntry = first.changes.find((entry) => entry.path === "secrets/token.txt");
       expect(initialSecretEntry).toBeDefined();
       expect(initialSecretEntry!.diff).toBe("none");
-      expect(initialSecretEntry!.content).toBeUndefined();
+      expect(initialSecretEntry!.patch).toBeUndefined();
+      expect(initialSecretEntry!.patchSuppressedReason).toBe("none");
       expect(first.tree["secrets/token.txt"]).toBeDefined();
 
       await attributedFs.writeFile("/project/secrets/token.txt", "secret-2");
       const status = await attributedVcs.status();
       const statusEntry = status.find((entry) => entry.path === "secrets/token.txt");
       expect(statusEntry).toBeDefined();
-      expect(statusEntry!.content).toBeUndefined();
-      expect(statusEntry!.previousContent).toBeUndefined();
+      expect(statusEntry!.patch).toBeUndefined();
+      expect(statusEntry!.patchSuppressedReason).toBe("none");
 
       const second = await attributedVcs.commit("rotate secret");
       const commitEntry = second.changes.find((entry) => entry.path === "secrets/token.txt");
       expect(commitEntry).toBeDefined();
-      expect(commitEntry!.content).toBeUndefined();
-      expect(commitEntry!.previousContent).toBeUndefined();
+      expect(commitEntry!.patch).toBeUndefined();
+      expect(commitEntry!.patchSuppressedReason).toBe("none");
 
       const diff = await attributedVcs.diff(1, 2);
       const diffEntry = diff.find((entry) => entry.path === "secrets/token.txt");
       expect(diffEntry).toBeDefined();
       expect(diffEntry!.diff).toBe("none");
-      expect(diffEntry!.content).toBeUndefined();
-      expect(diffEntry!.previousContent).toBeUndefined();
+      expect(diffEntry!.patch).toBeUndefined();
+      expect(diffEntry!.patchSuppressedReason).toBe("none");
+    });
+  });
+
+  describe("blob storage", () => {
+    test("deduplicates identical content across paths and commits", async () => {
+      await vcs.commit("initial");
+      await fs.writeFile("/project/COPY.md", "# My Project");
+      const rev = await vcs.commit("copy readme");
+
+      const readme = rev.tree["README.md"];
+      const copy = rev.tree["COPY.md"];
+      const readmeFile = getFileEntry(rev.tree, "README.md");
+      const copyFile = getFileEntry(rev.tree, "COPY.md");
+      expect(readmeFile.blobId).toBe(copyFile.blobId);
+      expect(await listBlobObjectPaths(fs, "/project/.vcs")).toHaveLength(3);
+    });
+
+    test("stores large replacements as distinct blobs without inline payload duplication", async () => {
+      const largeFs = createFS({
+        "/project/video.mp4": "a".repeat(256 * 1024),
+      });
+      const largeVcs = new VersionControlSystem({ fs: largeFs, path: "/project" });
+
+      const first = await largeVcs.commit("first video");
+      await largeFs.writeFile("/project/video.mp4", "b".repeat(320 * 1024));
+      const second = await largeVcs.commit("second video");
+
+      expect(await listBlobObjectPaths(largeFs, "/project/.vcs")).toHaveLength(2);
+      expect((await largeVcs.readRevisionFile(1, "video.mp4")).length).toBe(256 * 1024);
+      expect((await largeVcs.readRevisionFile(2, "video.mp4")).length).toBe(320 * 1024);
+      const firstVideo = getFileEntry(first.tree, "video.mp4");
+      const secondVideo = getFileEntry(second.tree, "video.mp4");
+      expect(firstVideo.blobId).not.toBe(secondVideo.blobId);
+
+      const revisionJson = JSON.parse(await largeFs.readFile("/project/.vcs/revisions/2.json", "utf8"));
+      expect(revisionJson.tree["video.mp4"].blobId).toBeDefined();
+      expect(revisionJson.tree["video.mp4"].content).toBeUndefined();
+    });
+  });
+
+  describe("streaming and index cache", () => {
+    test("uses readStream and writeStream for file content paths", async () => {
+      const baseFs = createFS({
+        "/project/file.txt": "hello",
+      });
+      const metrics = {
+        readStreamPaths: [] as string[],
+        writeStreamPaths: [] as string[],
+      };
+      const instrumentedFs = createInstrumentedFS(baseFs, metrics);
+      const instrumentedVcs = new VersionControlSystem({ fs: instrumentedFs, path: "/project" });
+
+      await instrumentedVcs.commit("initial");
+      expect(metrics.readStreamPaths).toContain("/project/file.txt");
+
+      await instrumentedFs.writeFile("/project/file.txt", "updated");
+      await instrumentedVcs.commit("update");
+      expect(metrics.writeStreamPaths.some((path) => path === "/project/file.txt")).toBe(false);
+
+      metrics.writeStreamPaths.length = 0;
+      await instrumentedVcs.checkout(1, { force: true });
+      expect(metrics.writeStreamPaths).toContain("/project/file.txt");
+    });
+
+    test("skips rehashing unchanged tracked files using the index cache", async () => {
+      const baseFs = createFS({
+        "/project/file.txt": "hello",
+      });
+      const metrics = {
+        readStreamPaths: [] as string[],
+        writeStreamPaths: [] as string[],
+      };
+      const instrumentedFs = createInstrumentedFS(baseFs, metrics);
+      const instrumentedVcs = new VersionControlSystem({ fs: instrumentedFs, path: "/project" });
+
+      await instrumentedVcs.commit("initial");
+      metrics.readStreamPaths.length = 0;
+      metrics.writeStreamPaths.length = 0;
+
+      await expect(instrumentedVcs.status()).resolves.toEqual([]);
+      expect(metrics.writeStreamPaths.filter((path) => path.includes("/.vcs/tmp/"))).toEqual([]);
+
+      await instrumentedFs.writeFile("/project/file.txt", "changed");
+      metrics.readStreamPaths.length = 0;
+      metrics.writeStreamPaths.length = 0;
+      await instrumentedVcs.status();
+      expect(metrics.readStreamPaths.filter((path) => !path.includes("/.vcs/"))).toEqual([
+        "/project/file.txt",
+      ]);
+      expect(metrics.writeStreamPaths.some((path) => path.includes("/.vcs/tmp/"))).toBe(true);
     });
   });
 
@@ -878,4 +972,55 @@ function toVolumePath(filePath: string): string {
   const withoutDrive = filePath.replace(/^[A-Za-z]:/, "");
   const normalized = withoutDrive.replace(/\\/g, "/");
   return normalized || "/";
+}
+
+async function listBlobObjectPaths(fs: VirtualFS, basePath: string): Promise<string[]> {
+  const root = fs.resolve(basePath, "objects", "blobs");
+  if (!(await fs.exists(root))) {
+    return [];
+  }
+
+  const results: string[] = [];
+
+  async function walk(currentPath: string): Promise<void> {
+    for (const entry of await fs.readdir(currentPath)) {
+      const fullPath = fs.resolve(currentPath, entry);
+      const stat = await fs.stat(fullPath);
+      if (stat.isDirectory()) {
+        await walk(fullPath);
+      } else {
+        results.push(fullPath);
+      }
+    }
+  }
+
+  await walk(root);
+  return results.sort();
+}
+
+function createInstrumentedFS(
+  baseFs: VirtualFS,
+  metrics: {
+    readStreamPaths: string[];
+    writeStreamPaths: string[];
+  },
+): VirtualFS {
+  return {
+    ...baseFs,
+    readStream(path: string): AsyncIterable<Uint8Array> {
+      metrics.readStreamPaths.push(path);
+      return baseFs.readStream(path);
+    },
+    async writeStream(path: string, opts?: { append?: boolean }): Promise<VirtualFSWritable> {
+      metrics.writeStreamPaths.push(path);
+      return baseFs.writeStream(path, opts);
+    },
+  };
+}
+
+function getFileEntry(tree: Record<string, unknown>, path: string) {
+  const entry = tree[path];
+  expect(entry).toBeDefined();
+  expect((entry as { kind?: string } | undefined)?.kind).not.toBe("directory");
+  return entry as { kind?: "file"; blobId: string; size: number };
 }

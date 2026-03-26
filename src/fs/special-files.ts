@@ -31,6 +31,7 @@ export function statSpecialFile(path: string): FileStat | undefined {
     isDirectory: () => false,
     size: 0,
     mtime: new Date(0),
+    mtimeMs: 0,
   };
 }
 

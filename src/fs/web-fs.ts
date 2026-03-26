@@ -1,3 +1,4 @@
+import type { VirtualFSWritable } from "../types.ts";
 import { FileSystem, type PathOps, type PermissionRules, type UnderlyingFS } from "./real-fs.ts";
 
 const DIRECTORY_MTIME = new Date(0);
@@ -84,6 +85,7 @@ export function createWebUnderlyingFS(root: FileSystemDirectoryHandle): Underlyi
         isDirectory(): boolean;
         size: number;
         mtime: Date;
+        mtimeMs: number;
       }> {
         const segments = getPathSegments(path);
 
@@ -102,6 +104,7 @@ export function createWebUnderlyingFS(root: FileSystemDirectoryHandle): Underlyi
             isDirectory: () => false,
             size: file.size,
             mtime: new Date(file.lastModified ?? 0),
+            mtimeMs: file.lastModified ?? 0,
           };
         } catch (error) {
           if (!isNotFoundOrTypeMismatch(error)) throw error;
@@ -177,6 +180,56 @@ export function createWebUnderlyingFS(root: FileSystemDirectoryHandle): Underlyi
         }
       },
     },
+    streams: {
+      createReadStream(path: string): AsyncIterable<Uint8Array> {
+        return {
+          async *[Symbol.asyncIterator]() {
+            const { parentSegments, name } = splitParent(path);
+            const parent = await walkDirectory(root, parentSegments, false);
+            const fileHandle = await parent.getFileHandle(name, { create: false });
+            const file = await fileHandle.getFile();
+            for await (const chunk of streamToAsyncIterable(file.stream())) {
+              yield chunk;
+            }
+          },
+        };
+      },
+      async createWriteStream(path: string, opts?: { append?: boolean }): Promise<VirtualFSWritable> {
+        const { parentSegments, name } = splitParent(path);
+        const parent = await walkDirectory(root, parentSegments, false);
+        const fileHandle = await parent.getFileHandle(name, { create: true });
+        const existingFile = opts?.append ? await fileHandle.getFile() : null;
+        const writable = await fileHandle.createWritable({ keepExistingData: !!opts?.append });
+        let position = opts?.append ? existingFile?.size ?? 0 : 0;
+        let closed = false;
+
+        return {
+          async write(chunk: Uint8Array): Promise<void> {
+            if (closed) {
+              throw new Error("stream is closed");
+            }
+            const bytes = new Uint8Array(chunk.byteLength);
+            bytes.set(chunk, 0);
+            await writable.write({
+              type: "write",
+              position,
+              data: bytes,
+            });
+            position += bytes.byteLength;
+          },
+          async close(): Promise<void> {
+            if (closed) return;
+            closed = true;
+            await writable.close();
+          },
+          async abort(_reason?: unknown): Promise<void> {
+            if (closed) return;
+            closed = true;
+            await writable.abort?.();
+          },
+        };
+      },
+    },
   };
 }
 
@@ -192,6 +245,7 @@ function createDirectoryStat() {
     isDirectory: () => true,
     size: 0,
     mtime: DIRECTORY_MTIME,
+    mtimeMs: DIRECTORY_MTIME.getTime(),
   };
 }
 
@@ -258,6 +312,25 @@ async function entryExists(dir: FileSystemDirectoryHandle, name: string): Promis
     if (isTypeMismatchError(error)) return true;
     if (!isNotFoundError(error)) throw error;
     return false;
+  }
+}
+
+async function* streamToAsyncIterable(
+  stream: ReadableStream<Uint8Array>,
+): AsyncIterable<Uint8Array> {
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return;
+      }
+      if (value) {
+        yield value;
+      }
+    }
+  } finally {
+    reader.releaseLock();
   }
 }
 

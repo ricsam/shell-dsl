@@ -36,14 +36,28 @@ export interface RevisionCounter {
 }
 
 export interface VCSConfigFile {
+  version: number;
   defaultBranch: string;
+}
+
+export interface VCSIndexEntry {
+  blobId: string;
+  size: number;
+  mtimeMs: number;
+  binary: boolean;
+  sampleHash: string;
+}
+
+export interface VCSIndexFile {
+  version: number;
+  entries: Record<string, VCSIndexEntry>;
 }
 
 // === Tree manifest ===
 
 export interface FileEntry {
   kind?: "file";
-  content: string; // base64-encoded
+  blobId: string;
   size: number;
 }
 
@@ -70,9 +84,11 @@ export interface VCSAttributeRule {
 }
 
 export interface VCSResolvedAttributes {
-  binary: boolean;
-  diff: VCSDiffMode;
+  binary?: boolean;
+  diff?: VCSDiffMode;
 }
+
+export type VCSPatchSuppressionReason = "binary" | "none" | "too-large";
 
 export interface DiffEntry {
   type: "add" | "modify" | "delete";
@@ -81,8 +97,10 @@ export interface DiffEntry {
   diff: VCSDiffMode;
   entryKind?: "file" | "directory";
   previousEntryKind?: "file" | "directory";
-  content?: string; // base64, for add/modify
-  previousContent?: string; // base64, for modify
+  blobId?: string;
+  previousBlobId?: string;
+  patch?: string;
+  patchSuppressedReason?: VCSPatchSuppressionReason;
 }
 
 // === Revision ===

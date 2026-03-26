@@ -1,11 +1,13 @@
 import * as path from "path";
+import * as nodeStreamFs from "node:fs";
 import * as nodeFs from "node:fs/promises";
-import type { VirtualFS, FileStat } from "../types.ts";
+import type { VirtualFS, VirtualFSWritable, FileStat } from "../types.ts";
 import { globVirtualFS } from "../utils/glob.ts";
 import {
   discardsSpecialFileWrites,
   existsSpecialFile,
   getSpecialPathError,
+  isDevNullPath,
   readSpecialFile,
   statSpecialFile,
 } from "./special-files.ts";
@@ -34,16 +36,34 @@ export interface UnderlyingFS {
       isDirectory(): boolean;
       size: number;
       mtime: Date;
+      mtimeMs?: number;
     }>;
     writeFile(path: string, data: Buffer | string): Promise<void>;
     appendFile(path: string, data: Buffer | string): Promise<void>;
     mkdir(path: string, opts?: { recursive?: boolean }): Promise<string | undefined | void>;
     rm(path: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void>;
   };
+  streams?: {
+    createReadStream?(path: string): AsyncIterable<Uint8Array>;
+    createWriteStream?(
+      path: string,
+      opts?: { append?: boolean },
+    ): Promise<VirtualFSWritable> | VirtualFSWritable;
+  };
 }
 
 // Default: use real node:fs
-const defaultFS: UnderlyingFS = { promises: nodeFs };
+const defaultFS: UnderlyingFS = {
+  promises: nodeFs,
+  streams: {
+    createReadStream(realPath: string): AsyncIterable<Uint8Array> {
+      return createNodeReadIterable(realPath);
+    },
+    createWriteStream(realPath: string, opts?: { append?: boolean }): VirtualFSWritable {
+      return createNodeWritable(realPath, opts);
+    },
+  },
+};
 const nodePathOps: PathOps = {
   separator: path.sep,
   resolve: (...paths) => path.resolve(...paths),
@@ -184,6 +204,19 @@ export class FileSystem implements VirtualFS {
     return encoding ? buf.toString(encoding) : buf;
   }
 
+  readStream(filePath: string): AsyncIterable<Uint8Array> {
+    if (isDevNullPath(filePath)) {
+      return emptyIterable();
+    }
+    this.checkPermission(filePath, "read");
+    const realPath = this.resolveSafePath(filePath);
+    const nativeStream = this.underlyingFs.streams?.createReadStream?.(realPath);
+    if (nativeStream) {
+      return normalizeChunks(nativeStream);
+    }
+    return bufferToIterable(this.readFile(filePath) as Promise<Buffer>);
+  }
+
   async readdir(dirPath: string): Promise<string[]> {
     const specialError = getSpecialPathError(dirPath, "readdir");
     if (specialError) {
@@ -208,6 +241,7 @@ export class FileSystem implements VirtualFS {
       isDirectory: () => stats.isDirectory(),
       size: stats.size,
       mtime: stats.mtime,
+      mtimeMs: stats.mtimeMs ?? stats.mtime.getTime(),
     };
   }
 
@@ -243,6 +277,25 @@ export class FileSystem implements VirtualFS {
     this.checkPermission(filePath, "write");
     const realPath = this.resolveSafePath(filePath);
     await this.underlyingFs.promises.appendFile(realPath, data);
+  }
+
+  async writeStream(filePath: string, opts?: { append?: boolean }): Promise<VirtualFSWritable> {
+    if (discardsSpecialFileWrites(filePath)) {
+      return createDiscardingWritable();
+    }
+    this.checkPermission(filePath, "write");
+    const realPath = this.resolveSafePath(filePath);
+    const nativeWriter = this.underlyingFs.streams?.createWriteStream?.(realPath, opts);
+    if (nativeWriter) {
+      return nativeWriter;
+    }
+    return createBufferedWritable(async (buffer) => {
+      if (opts?.append) {
+        await this.underlyingFs.promises.appendFile(realPath, buffer);
+      } else {
+        await this.underlyingFs.promises.writeFile(realPath, buffer);
+      }
+    });
   }
 
   async mkdir(dirPath: string, opts?: { recursive?: boolean }): Promise<void> {
@@ -284,4 +337,102 @@ export class FileSystem implements VirtualFS {
     this.checkPermission(cwd, "read");
     return globVirtualFS(this, pattern, { cwd });
   }
+}
+
+function emptyIterable(): AsyncIterable<Uint8Array> {
+  return {
+    async *[Symbol.asyncIterator]() {},
+  };
+}
+
+function bufferToIterable(bufferPromise: Promise<Buffer>): AsyncIterable<Uint8Array> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      const buffer = await bufferPromise;
+      yield buffer;
+    },
+  };
+}
+
+async function* normalizeChunks(source: AsyncIterable<Uint8Array>): AsyncIterable<Uint8Array> {
+  for await (const chunk of source) {
+    yield chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+  }
+}
+
+function createDiscardingWritable(): VirtualFSWritable {
+  return {
+    async write(_chunk: Uint8Array): Promise<void> {},
+    async close(): Promise<void> {},
+    async abort(_reason?: unknown): Promise<void> {},
+  };
+}
+
+function createBufferedWritable(
+  onClose: (buffer: Buffer) => Promise<void>,
+): VirtualFSWritable {
+  const chunks: Uint8Array[] = [];
+  let closed = false;
+
+  return {
+    async write(chunk: Uint8Array): Promise<void> {
+      if (closed) {
+        throw new Error("stream is closed");
+      }
+      chunks.push(Buffer.from(chunk));
+    },
+    async close(): Promise<void> {
+      if (closed) return;
+      closed = true;
+      await onClose(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+    },
+    async abort(_reason?: unknown): Promise<void> {
+      closed = true;
+      chunks.length = 0;
+    },
+  };
+}
+
+async function* createNodeReadIterable(realPath: string): AsyncIterable<Uint8Array> {
+  const stream = nodeStreamFs.createReadStream(realPath);
+  for await (const chunk of stream) {
+    yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  }
+}
+
+function createNodeWritable(
+  realPath: string,
+  opts?: { append?: boolean },
+): VirtualFSWritable {
+  const stream = nodeStreamFs.createWriteStream(realPath, {
+    flags: opts?.append ? "a" : "w",
+  });
+  const ready = new Promise<void>((resolve, reject) => {
+    stream.once("open", () => resolve());
+    stream.once("error", reject);
+  });
+
+  return {
+    async write(chunk: Uint8Array): Promise<void> {
+      await ready;
+      await new Promise<void>((resolve, reject) => {
+        stream.write(chunk, (error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    },
+    async close(): Promise<void> {
+      await ready;
+      await new Promise<void>((resolve, reject) => {
+        stream.end((error?: Error | null) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    },
+    async abort(reason?: unknown): Promise<void> {
+      stream.destroy(reason instanceof Error ? reason : undefined);
+    },
+  };
 }

@@ -9,16 +9,24 @@ import type {
   LogOptions,
   LogEntry,
   BranchInfo,
+  VCSIndexEntry,
 } from "./types.ts";
 import { VCSStorage } from "./storage.ts";
-import { diffManifests, diffWorkingTree } from "./diff.ts";
+import { diffManifests } from "./diff.ts";
+import { VCSObjectStore } from "./objects.ts";
 import { matchVCSPath, VCSRules } from "./rules.ts";
-import { buildTreeManifest, restoreTree } from "./snapshot.ts";
+import {
+  buildTreeManifest,
+  rebuildIndexForManifest,
+  restoreTree,
+  updateIndexForScopedPaths,
+} from "./snapshot.ts";
 
 export class VersionControlSystem {
   private readonly workFs: VirtualFS;
   private readonly workPath: string;
   private readonly storage: VCSStorage;
+  private readonly objectStore: VCSObjectStore;
   private readonly vcsInternalPath: string;
   private readonly rules: VCSRules;
 
@@ -29,6 +37,7 @@ export class VersionControlSystem {
     const metaFs = config.vcsPath?.fs ?? config.fs;
     const metaPath = config.vcsPath?.path ?? metaFs.resolve(config.path, ".vcs");
     this.storage = new VCSStorage(metaFs, metaPath);
+    this.objectStore = new VCSObjectStore(this.storage.fileSystem, this.storage.resolve());
 
     this.vcsInternalPath = resolveInternalPath(config.fs, metaFs, this.workPath, metaPath);
 
@@ -41,14 +50,20 @@ export class VersionControlSystem {
 
   /** Initialize the .vcs directory. Called automatically on first operation if needed. */
   async init(): Promise<void> {
-    if (await this.storage.isInitialized()) return;
+    if (await this.storage.isInitialized()) {
+      await this.storage.assertSupportedFormat();
+      return;
+    }
     await this.storage.initialize();
+    await this.objectStore.initialize();
   }
 
   private async ensureInit(): Promise<void> {
     if (!(await this.storage.isInitialized())) {
       await this.init();
+      return;
     }
+    await this.storage.assertSupportedFormat();
   }
 
   /** Get the current HEAD revision number, or null if no commits yet. */
@@ -73,6 +88,10 @@ export class VersionControlSystem {
     return rev.tree;
   }
 
+  private async currentIndex(): Promise<Record<string, VCSIndexEntry>> {
+    return this.storage.readIndex();
+  }
+
   /** Commit all pending changes, or selective changes if paths are provided. */
   async commit(message: string, opts?: CommitOptions): Promise<Revision> {
     await this.ensureInit();
@@ -81,49 +100,52 @@ export class VersionControlSystem {
     const parentManifest = parentId !== null
       ? (await this.storage.readRevision(parentId)).tree
       : {};
+    const previousIndex = await this.currentIndex();
+    const working = await buildTreeManifest(this.workFs, this.workPath, {
+      objectStore: this.objectStore,
+      rules: this.rules,
+      trackedPaths: Object.keys(parentManifest),
+      indexEntries: previousIndex,
+    });
 
     let newTree: TreeManifest;
     let changes: DiffEntry[];
 
     if (opts?.paths && opts.paths.length > 0) {
-      // Selective commit: only include matching files
-      const fullManifest = await buildTreeManifest(this.workFs, this.workPath, {
-        rules: this.rules,
-        trackedPaths: Object.keys(parentManifest),
-      });
-      const matchedPaths = filterPathsByGlobs(Object.keys(fullManifest), opts.paths);
-
-      // Start with parent manifest, overlay matched files from working tree
+      const matchedPaths = filterPathsByGlobs(Object.keys(working.manifest), opts.paths);
+      const parentMatchedPaths = filterPathsByGlobs(Object.keys(parentManifest), opts.paths);
       newTree = { ...parentManifest };
 
-      // Also check for deletions: files in parent that match patterns but are gone from working tree
-      const parentMatchedPaths = filterPathsByGlobs(Object.keys(parentManifest), opts.paths);
-      for (const p of parentMatchedPaths) {
-        if (!fullManifest[p]) {
-          delete newTree[p]; // file was deleted
+      for (const path of parentMatchedPaths) {
+        if (!working.manifest[path]) {
+          delete newTree[path];
         }
       }
-
-      for (const p of matchedPaths) {
-        newTree[p] = fullManifest[p]!;
+      for (const path of matchedPaths) {
+        newTree[path] = working.manifest[path]!;
       }
 
-      // Compute changes only for matched paths
       const relevantBefore: TreeManifest = {};
       const relevantAfter: TreeManifest = {};
       const allRelevant = new Set([...matchedPaths, ...parentMatchedPaths]);
-      for (const p of allRelevant) {
-        if (parentManifest[p]) relevantBefore[p] = parentManifest[p]!;
-        if (newTree[p]) relevantAfter[p] = newTree[p]!;
+      for (const path of allRelevant) {
+        if (parentManifest[path]) relevantBefore[path] = parentManifest[path]!;
+        if (newTree[path]) relevantAfter[path] = newTree[path]!;
       }
-      changes = diffManifests(relevantBefore, relevantAfter, this.rules);
-    } else {
-      // Full commit
-      newTree = await buildTreeManifest(this.workFs, this.workPath, {
+      changes = await diffManifests(relevantBefore, relevantAfter, {
         rules: this.rules,
-        trackedPaths: Object.keys(parentManifest),
+        objectStore: this.objectStore,
+        beforeIndex: previousIndex,
+        afterIndex: working.indexEntries,
       });
-      changes = diffManifests(parentManifest, newTree, this.rules);
+    } else {
+      newTree = working.manifest;
+      changes = await diffManifests(parentManifest, newTree, {
+        rules: this.rules,
+        objectStore: this.objectStore,
+        beforeIndex: previousIndex,
+        afterIndex: working.indexEntries,
+      });
     }
 
     if (changes.length === 0) {
@@ -142,8 +164,8 @@ export class VersionControlSystem {
     };
 
     await this.storage.writeRevision(rev);
+    await this.storage.writeIndex(working.indexEntries);
 
-    // Update branch ref or HEAD
     if (branch) {
       await this.storage.writeBranch(branch, { revision: id });
     } else {
@@ -163,7 +185,6 @@ export class VersionControlSystem {
     let targetBranch: string | null = null;
 
     if (typeof target === "string") {
-      // Check if it's a branch name
       const branchRef = await this.storage.readBranch(target);
       if (branchRef) {
         targetBranch = target;
@@ -175,7 +196,6 @@ export class VersionControlSystem {
       targetRevision = target;
     }
 
-    // Verify revision exists
     let rev: Revision;
     try {
       rev = await this.storage.readRevision(targetRevision);
@@ -186,34 +206,46 @@ export class VersionControlSystem {
     const currentManifest = await this.headManifest();
 
     if (isPartial) {
-      // Partial checkout: restore specific files, don't update HEAD
-      await restoreTree(this.workFs, this.workPath, rev.tree, {
+      await restoreTree(this.workFs, this.workPath, rev.tree, this.objectStore, {
         fullRestore: false,
         paths: opts!.paths!,
         rules: this.rules,
         trackedPaths: Object.keys(currentManifest),
       });
+
+      const updatedIndex = await updateIndexForScopedPaths(
+        this.workFs,
+        this.workPath,
+        rev.tree,
+        this.objectStore,
+        await this.currentIndex(),
+        opts!.paths!,
+      );
+      await this.storage.writeIndex(updatedIndex);
+      return;
+    }
+
+    if (!opts?.force) {
+      const changes = await this.status();
+      if (changes.length > 0) {
+        throw new Error("working tree has uncommitted changes (use force to discard)");
+      }
+    }
+
+    await restoreTree(this.workFs, this.workPath, rev.tree, this.objectStore, {
+      fullRestore: true,
+      rules: this.rules,
+      trackedPaths: Object.keys(currentManifest),
+    });
+
+    await this.storage.writeIndex(
+      await rebuildIndexForManifest(this.workFs, this.workPath, rev.tree, this.objectStore),
+    );
+
+    if (targetBranch) {
+      await this.storage.writeHead({ ref: `refs/heads/${targetBranch}` });
     } else {
-      // Full checkout
-      if (!opts?.force) {
-        const changes = await this.status();
-        if (changes.length > 0) {
-          throw new Error("working tree has uncommitted changes (use force to discard)");
-        }
-      }
-
-      await restoreTree(this.workFs, this.workPath, rev.tree, {
-        fullRestore: true,
-        rules: this.rules,
-        trackedPaths: Object.keys(currentManifest),
-      });
-
-      // Update HEAD
-      if (targetBranch) {
-        await this.storage.writeHead({ ref: `refs/heads/${targetBranch}` });
-      } else {
-        await this.storage.writeHead({ revision: targetRevision });
-      }
+      await this.storage.writeHead({ revision: targetRevision });
     }
   }
 
@@ -286,31 +318,24 @@ export class VersionControlSystem {
         break;
       }
 
-      const changedPaths = rev.changes.map((c) => c.path);
+      const changedPaths = rev.changes.map((change) => change.path);
 
       if (opts?.path) {
-        // Filter: only include if this revision touches the specified path
-        const matchesPath = changedPaths.some((p) => matchVCSPath(opts.path!, p));
-        if (matchesPath) {
-          entries.push({
-            id: rev.id,
-            parent: rev.parent,
-            branch: rev.branch,
-            message: rev.message,
-            timestamp: rev.timestamp,
-            paths: changedPaths,
-          });
+        const matchesPath = changedPaths.some((path) => matchVCSPath(opts.path!, path));
+        if (!matchesPath) {
+          currentId = rev.parent;
+          continue;
         }
-      } else {
-        entries.push({
-          id: rev.id,
-          parent: rev.parent,
-          branch: rev.branch,
-          message: rev.message,
-          timestamp: rev.timestamp,
-          paths: changedPaths,
-        });
       }
+
+      entries.push({
+        id: rev.id,
+        parent: rev.parent,
+        branch: rev.branch,
+        message: rev.message,
+        timestamp: rev.timestamp,
+        paths: changedPaths,
+      });
 
       currentId = rev.parent;
     }
@@ -322,7 +347,20 @@ export class VersionControlSystem {
   async status(): Promise<DiffEntry[]> {
     await this.ensureInit();
     const manifest = await this.headManifest();
-    return diffWorkingTree(this.workFs, this.workPath, manifest, this.rules);
+    const previousIndex = await this.currentIndex();
+    const working = await buildTreeManifest(this.workFs, this.workPath, {
+      objectStore: this.objectStore,
+      rules: this.rules,
+      trackedPaths: Object.keys(manifest),
+      indexEntries: previousIndex,
+    });
+    await this.storage.writeIndex(working.indexEntries);
+    return diffManifests(manifest, working.manifest, {
+      rules: this.rules,
+      objectStore: this.objectStore,
+      beforeIndex: previousIndex,
+      afterIndex: working.indexEntries,
+    });
   }
 
   /** Diff between two revisions. */
@@ -330,7 +368,37 @@ export class VersionControlSystem {
     await this.ensureInit();
     const a = await this.storage.readRevision(revA);
     const b = await this.storage.readRevision(revB);
-    return diffManifests(a.tree, b.tree, this.rules);
+    return diffManifests(a.tree, b.tree, {
+      rules: this.rules,
+      objectStore: this.objectStore,
+    });
+  }
+
+  async readBlob(blobId: string): Promise<Buffer>;
+  async readBlob(blobId: string, encoding: BufferEncoding): Promise<string>;
+  async readBlob(blobId: string, encoding?: BufferEncoding): Promise<Buffer | string> {
+    const content = await this.objectStore.readBlob(blobId);
+    return encoding ? content.toString(encoding) : content;
+  }
+
+  async readRevisionFile(revisionId: number, path: string): Promise<Buffer>;
+  async readRevisionFile(
+    revisionId: number,
+    path: string,
+    encoding: BufferEncoding,
+  ): Promise<string>;
+  async readRevisionFile(
+    revisionId: number,
+    path: string,
+    encoding?: BufferEncoding,
+  ): Promise<Buffer | string> {
+    const revision = await this.storage.readRevision(revisionId);
+    const normalizedPath = path.replace(/^\/+/, "");
+    const entry = revision.tree[normalizedPath];
+    if (!entry || entry.kind === "directory") {
+      throw new Error(`file "${path}" not found in revision ${revisionId}`);
+    }
+    return this.readBlob(entry.blobId, encoding as BufferEncoding);
   }
 
   /** Get current HEAD info. */
@@ -340,10 +408,6 @@ export class VersionControlSystem {
   }
 }
 
-/**
- * Filter a list of paths to only those matching any of the given glob patterns.
- * Patterns may start with `/` which is stripped before matching.
- */
 function filterPathsByGlobs(paths: string[], patterns: string[]): string[] {
   return paths.filter((filePath) =>
     patterns.some((pattern) => matchVCSPath(pattern, filePath)),

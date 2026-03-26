@@ -36,6 +36,24 @@ describe("VirtualFS Adapter", () => {
     });
   });
 
+  describe("readStream", () => {
+    test("streams file content as bytes", async () => {
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of fs.readStream("/file.txt")) {
+        chunks.push(chunk);
+      }
+      expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString()).toBe("content");
+    });
+
+    test("streams /dev/null as empty", async () => {
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of fs.readStream("/dev/null")) {
+        chunks.push(chunk);
+      }
+      expect(chunks).toEqual([]);
+    });
+  });
+
   describe("readdir", () => {
     test("lists directory contents", async () => {
       const entries = await fs.readdir("/");
@@ -135,6 +153,23 @@ describe("VirtualFS Adapter", () => {
     test("discards appends to /dev/null", async () => {
       await fs.appendFile("/dev/null", "ignored");
       expect(vol.existsSync("/dev/null")).toBe(false);
+    });
+  });
+
+  describe("writeStream", () => {
+    test("writes streamed content", async () => {
+      const writer = await fs.writeStream("/streamed.txt");
+      await writer.write(new TextEncoder().encode("streamed "));
+      await writer.write(new TextEncoder().encode("content"));
+      await writer.close();
+      expect(vol.readFileSync("/streamed.txt", "utf8")).toBe("streamed content");
+    });
+
+    test("appends streamed content", async () => {
+      const writer = await fs.writeStream("/file.txt", { append: true });
+      await writer.write(new TextEncoder().encode(" more"));
+      await writer.close();
+      expect(vol.readFileSync("/file.txt", "utf8")).toBe("content more");
     });
   });
 

@@ -4,8 +4,12 @@ import type {
   BranchRef,
   RevisionCounter,
   VCSConfigFile,
+  VCSIndexEntry,
+  VCSIndexFile,
   Revision,
 } from "./types.ts";
+
+const VCS_FORMAT_VERSION = 2;
 
 export class VCSStorage {
   constructor(
@@ -27,10 +31,19 @@ export class VCSStorage {
     await this.fs.mkdir(this.basePath, { recursive: true });
     await this.fs.mkdir(this.path("refs", "heads"), { recursive: true });
     await this.fs.mkdir(this.path("revisions"), { recursive: true });
+    await this.fs.mkdir(this.path("objects", "blobs"), { recursive: true });
+    await this.fs.mkdir(this.path("tmp"), { recursive: true });
 
     await this.writeHead({ ref: `refs/heads/${defaultBranch}` });
     await this.writeJSON(["counter.json"], { next: 1 } satisfies RevisionCounter);
-    await this.writeJSON(["config.json"], { defaultBranch } satisfies VCSConfigFile);
+    await this.writeJSON(["config.json"], {
+      version: VCS_FORMAT_VERSION,
+      defaultBranch,
+    } satisfies VCSConfigFile);
+    await this.writeJSON(["index.json"], {
+      version: VCS_FORMAT_VERSION,
+      entries: {},
+    } satisfies VCSIndexFile);
   }
 
   // --- HEAD ---
@@ -91,7 +104,38 @@ export class VCSStorage {
   // --- Config ---
 
   async readConfig(): Promise<VCSConfigFile> {
-    return this.readJSON<VCSConfigFile>("config.json");
+    const config = await this.readJSON<VCSConfigFile>("config.json");
+    this.assertSupportedVersion(config.version);
+    return config;
+  }
+
+  async assertSupportedFormat(): Promise<void> {
+    await this.readConfig();
+  }
+
+  async readIndex(): Promise<Record<string, VCSIndexEntry>> {
+    const indexPath = this.path("index.json");
+    if (!(await this.fs.exists(indexPath))) {
+      return {};
+    }
+    const index = await this.readJSON<VCSIndexFile>("index.json");
+    this.assertSupportedVersion(index.version);
+    return index.entries;
+  }
+
+  async writeIndex(entries: Record<string, VCSIndexEntry>): Promise<void> {
+    await this.writeJSON(["index.json"], {
+      version: VCS_FORMAT_VERSION,
+      entries,
+    } satisfies VCSIndexFile);
+  }
+
+  resolve(...segments: string[]): string {
+    return this.path(...segments);
+  }
+
+  get fileSystem(): VirtualFS {
+    return this.fs;
   }
 
   // --- Helpers ---
@@ -105,5 +149,13 @@ export class VCSStorage {
   private async writeJSON(segments: string[], data: unknown): Promise<void> {
     const filePath = this.path(...segments);
     await this.fs.writeFile(filePath, JSON.stringify(data, null, 2));
+  }
+
+  private assertSupportedVersion(version: number | undefined): void {
+    if (version !== VCS_FORMAT_VERSION) {
+      throw new Error(
+        `unsupported VCS format version ${version ?? "unknown"}; reinitialize the repository`,
+      );
+    }
   }
 }

@@ -5,6 +5,7 @@ export { ShellPromise, type ShellPromiseOptions } from "./shell-promise.ts";
 // Types
 export type {
   VirtualFS,
+  VirtualFSWritable,
   FileStat,
   Command,
   CommandContext,
@@ -98,12 +99,15 @@ export type {
   VCSAttributeRule,
   VCSResolvedAttributes,
   VCSDiffMode,
+  VCSPatchSuppressionReason,
   Revision,
   DiffEntry,
   TreeManifest,
   TreeEntry,
   FileEntry,
   DirectoryEntry,
+  VCSIndexEntry,
+  VCSIndexFile,
   CommitOptions,
   CheckoutOptions,
   LogOptions,

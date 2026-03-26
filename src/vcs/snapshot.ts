@@ -1,7 +1,14 @@
 import type { VirtualFS } from "../types.ts";
-import type { TreeManifest, FileEntry, TreeEntry } from "./types.ts";
+import type { TreeManifest, FileEntry, TreeEntry, VCSIndexEntry } from "./types.ts";
+import { hashSample, readStreamSample } from "./content.ts";
 import { matchVCSPath, VCSRules } from "./rules.ts";
 import { walkTreeEntries } from "./walk.ts";
+import { VCSObjectStore } from "./objects.ts";
+
+export interface BuildTreeManifestResult {
+  manifest: TreeManifest;
+  indexEntries: Record<string, VCSIndexEntry>;
+}
 
 /**
  * Build a TreeManifest from the current working tree.
@@ -9,14 +16,17 @@ import { walkTreeEntries } from "./walk.ts";
 export async function buildTreeManifest(
   fs: VirtualFS,
   rootPath: string,
-  options?: {
+  options: {
+    objectStore: VCSObjectStore;
     rules?: VCSRules;
     trackedPaths?: Iterable<string>;
+    indexEntries?: Record<string, VCSIndexEntry>;
   },
-): Promise<TreeManifest> {
+): Promise<BuildTreeManifestResult> {
   const manifest: TreeManifest = {};
-  const rules = options?.rules ?? new VCSRules({ internalDirName: ".vcs" });
-  const trackedPaths = new Set(options?.trackedPaths ?? []);
+  const nextIndexEntries: Record<string, VCSIndexEntry> = {};
+  const rules = options.rules ?? new VCSRules({ internalDirName: ".vcs" });
+  const trackedPaths = new Set(options.trackedPaths ?? []);
   const entries = await walkTreeEntries(fs, rootPath, {
     enterDirectory: (relPath) => rules.shouldEnterDirectory(relPath, trackedPaths),
     includeFile: (relPath) => rules.shouldIncludeWorkingFile(relPath, trackedPaths),
@@ -31,51 +41,43 @@ export async function buildTreeManifest(
     }
 
     const fullPath = fs.resolve(rootPath, entry.path);
-    const content = await fs.readFile(fullPath);
-    const buf = Buffer.from(content);
+    const stat = await fs.stat(fullPath);
+    const cached = options.indexEntries?.[entry.path];
+
+    if (
+      cached &&
+      cached.size === stat.size &&
+      cached.mtimeMs === stat.mtimeMs &&
+      await options.objectStore.hasBlob(cached.blobId)
+    ) {
+      const sampleHash = hashSample(await readStreamSample(fs.readStream(fullPath)));
+      if (sampleHash === cached.sampleHash) {
+        manifest[entry.path] = {
+          kind: "file",
+          blobId: cached.blobId,
+          size: cached.size,
+        };
+        nextIndexEntries[entry.path] = cached;
+        continue;
+      }
+    }
+
+    const stored = await options.objectStore.store(fs.readStream(fullPath));
     manifest[entry.path] = {
       kind: "file",
-      content: buf.toString("base64"),
-      size: buf.length,
+      blobId: stored.blobId,
+      size: stored.size,
+    };
+    nextIndexEntries[entry.path] = {
+      blobId: stored.blobId,
+      size: stored.size,
+      mtimeMs: stat.mtimeMs,
+      binary: stored.binary,
+      sampleHash: stored.sampleHash,
     };
   }
 
-  return manifest;
-}
-
-/**
- * Build a TreeManifest for only the specified relative paths.
- */
-export async function buildPartialManifest(
-  fs: VirtualFS,
-  rootPath: string,
-  paths: string[],
-): Promise<TreeManifest> {
-  const manifest: TreeManifest = {};
-
-  for (const relPath of paths) {
-    const fullPath = fs.resolve(rootPath, relPath);
-    if (!(await fs.exists(fullPath))) continue;
-    const stat = await fs.stat(fullPath);
-    if (stat.isDirectory()) {
-      const entries = await fs.readdir(fullPath);
-      if (entries.length === 0) {
-        manifest[relPath] = { kind: "directory", size: 0 };
-      }
-      continue;
-    }
-    if (!stat.isFile()) continue;
-
-    const content = await fs.readFile(fullPath);
-    const buf = Buffer.from(content);
-    manifest[relPath] = {
-      kind: "file",
-      content: buf.toString("base64"),
-      size: buf.length,
-    };
-  }
-
-  return manifest;
+  return { manifest, indexEntries: nextIndexEntries };
 }
 
 /**
@@ -88,6 +90,7 @@ export async function restoreTree(
   fs: VirtualFS,
   rootPath: string,
   manifest: TreeManifest,
+  objectStore: VCSObjectStore,
   options?: {
     fullRestore?: boolean;
     paths?: string[];
@@ -131,7 +134,7 @@ export async function restoreTree(
       await ensureDirectoryExists(fs, fs.resolve(rootPath, relPath));
       continue;
     }
-    await writeFileFromEntry(fs, rootPath, relPath, entry);
+    await writeFileFromEntry(fs, rootPath, relPath, entry, objectStore);
   }
 
   if (shouldDeleteExtras) {
@@ -158,18 +161,93 @@ export async function restoreTree(
   }
 }
 
+export async function rebuildIndexForManifest(
+  fs: VirtualFS,
+  rootPath: string,
+  manifest: TreeManifest,
+  objectStore: VCSObjectStore,
+): Promise<Record<string, VCSIndexEntry>> {
+  const entries: Record<string, VCSIndexEntry> = {};
+
+  for (const [relPath, entry] of Object.entries(manifest)) {
+    if (isDirectoryEntry(entry)) {
+      continue;
+    }
+
+    const fullPath = fs.resolve(rootPath, relPath);
+    const stat = await fs.stat(fullPath);
+    entries[relPath] = {
+      blobId: entry.blobId,
+      size: entry.size,
+      mtimeMs: stat.mtimeMs,
+      binary: await objectStore.isBinaryBlob(entry.blobId),
+      sampleHash: hashSample(await readStreamSample(fs.readStream(fullPath))),
+    };
+  }
+
+  return entries;
+}
+
+export async function updateIndexForScopedPaths(
+  fs: VirtualFS,
+  rootPath: string,
+  manifest: TreeManifest,
+  objectStore: VCSObjectStore,
+  existingIndex: Record<string, VCSIndexEntry>,
+  patterns: string[],
+): Promise<Record<string, VCSIndexEntry>> {
+  const nextIndex = { ...existingIndex };
+
+  for (const relPath of Object.keys(existingIndex)) {
+    if (isPathInScope(relPath, patterns) && !manifest[relPath]) {
+      delete nextIndex[relPath];
+    }
+  }
+
+  for (const [relPath, entry] of Object.entries(manifest)) {
+    if (!isPathInScope(relPath, patterns) || isDirectoryEntry(entry)) {
+      continue;
+    }
+
+    const fullPath = fs.resolve(rootPath, relPath);
+    if (!(await fs.exists(fullPath))) {
+      delete nextIndex[relPath];
+      continue;
+    }
+    const stat = await fs.stat(fullPath);
+    nextIndex[relPath] = {
+      blobId: entry.blobId,
+      size: entry.size,
+      mtimeMs: stat.mtimeMs,
+      binary: await objectStore.isBinaryBlob(entry.blobId),
+      sampleHash: hashSample(await readStreamSample(fs.readStream(fullPath))),
+    };
+  }
+
+  return nextIndex;
+}
+
 async function writeFileFromEntry(
   fs: VirtualFS,
   rootPath: string,
   relPath: string,
   entry: FileEntry,
+  objectStore: VCSObjectStore,
 ): Promise<void> {
   const fullPath = fs.resolve(rootPath, relPath);
   await ensureDirectoryExists(fs, fs.dirname(fullPath));
   await removeDirectoryAtPath(fs, fullPath);
 
-  const buf = Buffer.from(entry.content, "base64");
-  await fs.writeFile(fullPath, buf);
+  const writer = await fs.writeStream(fullPath);
+  try {
+    for await (const chunk of objectStore.readBlobStream(entry.blobId)) {
+      await writer.write(chunk);
+    }
+    await writer.close();
+  } catch (error) {
+    await writer.abort?.(error);
+    throw error;
+  }
 }
 
 function isDirectoryEntry(entry: TreeEntry): entry is Extract<TreeEntry, { kind: "directory" }> {

@@ -46,6 +46,7 @@ describe("globVirtualFS", () => {
             isDirectory: () => true,
             size: 0,
             mtime: new Date(0),
+            mtimeMs: 0,
           };
         }
         if (normalized.startsWith("/docs/")) {

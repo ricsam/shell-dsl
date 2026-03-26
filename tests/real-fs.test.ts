@@ -75,6 +75,22 @@ describe("FileSystem", () => {
       );
     });
 
+    test("streams file reads and writes", async () => {
+      const fs = new FileSystem("/project", {}, memfs);
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of fs.readStream("/src/index.ts")) {
+        chunks.push(chunk);
+      }
+      expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString()).toBe(
+        "console.log('hello');"
+      );
+
+      const writer = await fs.writeStream("/src/streamed.ts");
+      await writer.write(new TextEncoder().encode("// streamed"));
+      await writer.close();
+      expect(vol.readFileSync("/project/src/streamed.ts", "utf8")).toBe("// streamed");
+    });
+
     test("discards writes to /dev/null", async () => {
       const fs = new FileSystem("/project", {}, memfs);
       await fs.writeFile("/dev/null", "ignored");

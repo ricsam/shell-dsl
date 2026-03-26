@@ -59,8 +59,8 @@ export class VCSRules {
   }
 
   resolveAttributes(relPath: string): VCSResolvedAttributes {
-    let binary = false;
-    let diff: VCSResolvedAttributes["diff"] = "text";
+    let binary: boolean | undefined;
+    let diff: VCSResolvedAttributes["diff"];
 
     for (const rule of this.attributeRules) {
       if (!matchVCSPath(rule.pattern, relPath)) continue;
@@ -74,6 +74,9 @@ export class VCSRules {
 
     if (diff === "binary") {
       binary = true;
+    }
+    if (diff === "text") {
+      binary = false;
     }
 
     return { binary, diff };
