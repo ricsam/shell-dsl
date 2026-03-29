@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.36
+
+### Patch Changes
+
+- field-splitting refactor
+
 ## 0.0.35
 
 ### Patch Changes

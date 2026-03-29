@@ -1,7 +1,20 @@
 import { ParseError } from "../errors.ts";
 import { Lexer } from "../lexer/lexer.ts";
 import type { Token, KeywordValue } from "../lexer/tokens.ts";
-import type { ASTNode, Redirect, RedirectMode, CommandNode, IfNode, ForNode, WhileNode, UntilNode, CaseNode, CaseClause } from "./ast.ts";
+import type {
+  ASTNode,
+  Redirect,
+  RedirectMode,
+  CommandNode,
+  IfNode,
+  ForNode,
+  WhileNode,
+  UntilNode,
+  CaseNode,
+  CaseClause,
+  WordNode,
+  WordPart,
+} from "./ast.ts";
 
 export class Parser {
   private tokens: Token[];
@@ -27,7 +40,6 @@ export class Parser {
 
     while (this.match("semicolon") || this.match("newline")) {
       this.skipNewlines();
-      // Skip empty commands after separator, or stop at terminating keywords
       if (this.isAtEnd() || this.check("semicolon") || this.check("newline") || this.isTerminatingKeyword()) continue;
       commands.push(this.parseAndOr());
     }
@@ -145,7 +157,6 @@ export class Parser {
   private parseFor(): ForNode {
     this.expectKeyword("for");
 
-    // Get variable name
     const varToken = this.peek();
     if (varToken.type !== "word") {
       throw new ParseError("Expected variable name after 'for'");
@@ -153,17 +164,14 @@ export class Parser {
     this.advance();
     const variable = varToken.value;
 
-    // Parse optional 'in' clause
-    const items: ASTNode[] = [];
+    const items: WordNode[] = [];
     if (this.checkKeyword("in")) {
       this.expectKeyword("in");
-      // Read items until semicolon, newline, or 'do'
       while (!this.isAtEnd() && !this.check("semicolon") && !this.check("newline") && !this.checkKeyword("do")) {
         items.push(this.parseWordArg());
       }
     }
 
-    // Consume separator (semicolon or newline)
     if (!this.match("semicolon")) {
       this.match("newline");
     }
@@ -211,7 +219,7 @@ export class Parser {
     };
   }
 
-  // case := 'case' word 'in' (pattern ('|' pattern)* ')' compound_list ';;')* 'esac'
+  // case := 'case' word 'in' case_clause* 'esac'
   private parseCase(): CaseNode {
     this.expectKeyword("case");
     const word = this.parseWordArg();
@@ -221,28 +229,22 @@ export class Parser {
     const clauses: CaseClause[] = [];
 
     while (!this.isAtEnd() && !this.checkKeyword("esac")) {
-      // Parse patterns separated by '|'
-      // Skip leading '(' if present
       this.match("openParen");
 
-      const patterns: ASTNode[] = [];
+      const patterns: WordNode[] = [];
       patterns.push(this.parseCasePattern());
 
       while (this.match("pipe")) {
         patterns.push(this.parseCasePattern());
       }
 
-      // Expect ')'
       if (!this.match("closeParen")) {
         throw new ParseError("Expected ')' after case pattern");
       }
 
-      // Parse body until ';;' or 'esac'
       const body = this.parseCaseBody();
-
       clauses.push({ patterns, body });
 
-      // ';;' is optional for the last clause
       this.match("doubleSemicolon");
       this.skipNewlines();
     }
@@ -256,10 +258,9 @@ export class Parser {
     };
   }
 
-  private parseCasePattern(): ASTNode {
+  private parseCasePattern(): WordNode {
     const token = this.peek();
 
-    // Handle glob patterns and words
     if (token.type === "word" || token.type === "glob" || token.type === "singleQuote" || token.type === "doubleQuote") {
       return this.parseWordArg();
     }
@@ -271,22 +272,19 @@ export class Parser {
     const commands: ASTNode[] = [];
     this.skipNewlines();
 
-    // Parse until ';;' or 'esac'
     while (!this.isAtEnd() && !this.check("doubleSemicolon") && !this.checkKeyword("esac")) {
       commands.push(this.parseAndOr());
-      // Consume separator
       if (!this.match("semicolon") && !this.match("newline")) {
         break;
       }
       this.skipNewlines();
-      // Check for terminators after consuming separators
       if (this.check("doubleSemicolon") || this.checkKeyword("esac")) {
         break;
       }
     }
 
     if (commands.length === 0) {
-      return { type: "command", name: { type: "literal", value: "true" }, args: [], redirects: [], assignments: [] };
+      return this.createNoopCommand();
     }
     if (commands.length === 1) {
       return commands[0]!;
@@ -299,17 +297,14 @@ export class Parser {
     this.skipNewlines();
     const commands: ASTNode[] = [];
 
-    // Check for empty list
     if (this.isCompoundListTerminator(terminators)) {
-      // Return a no-op command for empty list
-      return { type: "command", name: { type: "literal", value: "true" }, args: [], redirects: [], assignments: [] };
+      return this.createNoopCommand();
     }
 
     commands.push(this.parseAndOr());
 
     while ((this.match("semicolon") || this.match("newline")) && !this.isAtEnd()) {
       this.skipNewlines();
-      // Check for terminators
       if (this.isCompoundListTerminator(terminators)) {
         break;
       }
@@ -321,6 +316,23 @@ export class Parser {
     }
 
     return { type: "sequence", commands };
+  }
+
+  private createNoopCommand(): CommandNode {
+    return {
+      type: "command",
+      name: this.createTextWord("true"),
+      args: [],
+      redirects: [],
+      assignments: [],
+    };
+  }
+
+  private createTextWord(value: string, quoted = false): WordNode {
+    return {
+      type: "word",
+      parts: value === "" && !quoted ? [] : [{ type: "text", value, quoted }],
+    };
   }
 
   private isCompoundListTerminator(terminators: KeywordValue[]): boolean {
@@ -339,33 +351,28 @@ export class Parser {
       throw new ParseError(`Expected '${value}'`);
     }
     this.advance();
-    // Don't skip newlines here - let the caller handle them
-    // Newlines are significant as command separators in compound lists
   }
 
   // command := assignment* word+ redirect*
   private parseCommand(): CommandNode {
-    const assignments: Array<{ name: string; value: ASTNode }> = [];
-    const args: ASTNode[] = [];
+    const assignments: Array<{ name: string; value: WordNode }> = [];
+    const args: WordNode[] = [];
     const redirects: Redirect[] = [];
 
-    // Collect leading assignments
     while (this.check("assignment")) {
       const token = this.advance() as Token & { type: "assignment" };
       assignments.push({
         name: token.name,
-        value: this.tokenToNode(token.value),
+        value: this.tokenToWord(token.value),
       });
     }
 
-    // Collect command name and arguments
     while (this.isWordToken()) {
-      // Check if it's a heredoc token - convert to input redirect
       if (this.peek().type === "heredoc") {
         const heredocToken = this.advance() as Token & { type: "heredoc" };
         redirects.push({
           mode: "<",
-          target: this.tokenToNode(heredocToken),
+          target: this.tokenToWord(heredocToken),
           heredocContent: true,
         });
       } else {
@@ -373,17 +380,15 @@ export class Parser {
       }
     }
 
-    // Collect redirects
     while (this.check("redirect")) {
       const redirect = this.parseRedirect();
       redirects.push(redirect);
-      // After a redirect, there might be more words
       while (this.isWordToken()) {
         if (this.peek().type === "heredoc") {
           const heredocToken = this.advance() as Token & { type: "heredoc" };
           redirects.push({
             mode: "<",
-            target: this.tokenToNode(heredocToken),
+            target: this.tokenToWord(heredocToken),
             heredocContent: true,
           });
         } else {
@@ -396,7 +401,7 @@ export class Parser {
       throw new ParseError("Expected command");
     }
 
-    const name = args.shift() ?? { type: "literal" as const, value: redirects.length > 0 ? ":" : "" };
+    const name = args.shift() ?? this.createTextWord(redirects.length > 0 ? ":" : "");
 
     return {
       type: "command",
@@ -407,149 +412,186 @@ export class Parser {
     };
   }
 
-  private parseWordArg(): ASTNode {
+  private parseWordArg(): WordNode {
     const token = this.advance();
-    return this.tokenToNode(token);
+    return this.tokenToWord(token);
   }
 
-  private tokenToNode(token: Token | string | Token[]): ASTNode {
+  private tokenToWord(token: Token | string | Token[]): WordNode {
+    const parts = this.tokenToWordParts(token);
+    return {
+      type: "word",
+      parts,
+    };
+  }
+
+  private tokenToWordParts(token: Token | string | Token[], quoted = false): WordPart[] {
     if (typeof token === "string") {
-      return { type: "literal", value: token };
+      return [{ type: "text", value: token, quoted }];
     }
 
     if (Array.isArray(token)) {
-      const parts = token.map((t) => this.tokenToNode(t));
-      if (parts.length === 1) return parts[0]!;
-      return { type: "concat", parts };
+      return token.flatMap((part) => this.tokenToWordParts(part, quoted));
     }
 
     switch (token.type) {
       case "word":
-        return { type: "literal", value: token.value };
+        return [{ type: "text", value: token.value, quoted }];
       case "singleQuote":
-        return { type: "literal", value: token.value };
+        return [{ type: "text", value: token.value, quoted: true }];
       case "doubleQuote":
         return this.parseDoubleQuoteParts(token.parts);
       case "variable":
-        return { type: "variable", name: token.name };
-      case "substitution":
-        // Parse the inner command
+        return [{ type: "variable", name: token.name, quoted }];
+      case "substitution": {
         const innerParser = new Parser(
           new Lexer(token.command, { preserveNewlines: true }).tokenize()
         );
-        return { type: "substitution", command: innerParser.parse() };
+        return [{ type: "substitution", command: innerParser.parse(), quoted }];
+      }
       case "arithmetic":
-        return { type: "arithmetic", expression: token.expression };
+        return [{ type: "arithmetic", expression: token.expression, quoted }];
       case "glob":
-        return { type: "glob", pattern: token.pattern };
+        return [{ type: "text", value: token.pattern, quoted }];
       case "assignment":
-        return this.tokenToNode(token.value);
+        return this.tokenToWordParts(token.value, quoted);
       case "heredoc":
-        if (token.expand) {
-          return this.parseHeredocContent(token.content);
-        }
-        return { type: "literal", value: token.content };
+        return token.expand
+          ? this.parseHeredocContent(token.content).parts
+          : [{ type: "text", value: token.content, quoted: true }];
       default:
         throw new ParseError(`Unexpected token type: ${(token as Token).type}`);
     }
   }
 
-  private parseDoubleQuoteParts(parts: Array<string | Token>): ASTNode {
+  private parseDoubleQuoteParts(parts: Array<string | Token>): WordPart[] {
     if (parts.length === 0) {
-      return { type: "literal", value: "" };
+      return [{ type: "text", value: "", quoted: true }];
     }
 
-    if (parts.length === 1) {
-      const part = parts[0]!;
-      if (typeof part === "string") {
-        return { type: "literal", value: part };
-      }
-      return this.tokenToNode(part);
-    }
-
-    const nodes: ASTNode[] = parts.map((part) => {
-      if (typeof part === "string") {
-        return { type: "literal" as const, value: part };
-      }
-      return this.tokenToNode(part);
-    });
-
-    return { type: "concat", parts: nodes };
+    return parts.flatMap((part) => this.tokenToWordParts(part, true));
   }
 
-  private parseHeredocContent(content: string): ASTNode {
-    // Parse content looking for $VAR and ${VAR} patterns
-    const parts: ASTNode[] = [];
-    let currentLiteral = "";
+  private parseHeredocContent(content: string): WordNode {
+    const parts: WordPart[] = [];
+    let currentText = "";
     let i = 0;
 
-    while (i < content.length) {
-      if (content[i] === "$") {
-        // Flush current literal
-        if (currentLiteral) {
-          parts.push({ type: "literal", value: currentLiteral });
-          currentLiteral = "";
-        }
-
-        i++; // consume $
-        if (i >= content.length) {
-          currentLiteral += "$";
-          break;
-        }
-
-        if (content[i] === "{") {
-          // ${VAR} syntax
-          i++; // consume {
-          let varName = "";
-          while (i < content.length && content[i] !== "}") {
-            varName += content[i];
-            i++;
-          }
-          if (i < content.length && content[i] === "}") {
-            i++; // consume }
-          }
-          if (varName) {
-            parts.push({ type: "variable", name: varName });
-          }
-        } else if (/[a-zA-Z_]/.test(content[i] ?? "")) {
-          // $VAR syntax
-          let varName = "";
-          while (i < content.length && /[a-zA-Z0-9_]/.test(content[i] ?? "")) {
-            varName += content[i];
-            i++;
-          }
-          parts.push({ type: "variable", name: varName });
-        } else {
-          // Not a variable, keep the $
-          currentLiteral += "$";
-        }
-      } else {
-        currentLiteral += content[i];
-        i++;
+    const pushText = () => {
+      if (currentText.length > 0) {
+        parts.push({ type: "text", value: currentText, quoted: false });
+        currentText = "";
       }
+    };
+
+    while (i < content.length) {
+      if (content[i] !== "$") {
+        currentText += content[i];
+        i++;
+        continue;
+      }
+
+      pushText();
+      i++;
+
+      if (i >= content.length) {
+        currentText += "$";
+        break;
+      }
+
+      if (content[i] === "{") {
+        i++;
+        let name = "";
+        while (i < content.length && content[i] !== "}") {
+          name += content[i];
+          i++;
+        }
+        if (i < content.length && content[i] === "}") {
+          i++;
+        }
+        parts.push({ type: "variable", name, quoted: false });
+        continue;
+      }
+
+      if (content[i] === "(" && content[i + 1] === "(") {
+        i += 2;
+        let depth = 1;
+        let expression = "";
+        while (i < content.length && depth > 0) {
+          if (content[i] === "(" && content[i + 1] === "(") {
+            depth++;
+            expression += content[i]! + content[i + 1]!;
+            i += 2;
+            continue;
+          }
+          if (content[i] === ")" && content[i + 1] === ")") {
+            depth--;
+            if (depth === 0) {
+              i += 2;
+              break;
+            }
+            expression += content[i]! + content[i + 1]!;
+            i += 2;
+            continue;
+          }
+          expression += content[i]!;
+          i++;
+        }
+        parts.push({ type: "arithmetic", expression, quoted: false });
+        continue;
+      }
+
+      if (content[i] === "(") {
+        i++;
+        let depth = 1;
+        let command = "";
+        while (i < content.length && depth > 0) {
+          if (content[i] === "(") {
+            depth++;
+          } else if (content[i] === ")") {
+            depth--;
+            if (depth === 0) {
+              i++;
+              break;
+            }
+          }
+          command += content[i]!;
+          i++;
+        }
+        const innerParser = new Parser(
+          new Lexer(command, { preserveNewlines: true }).tokenize()
+        );
+        parts.push({ type: "substitution", command: innerParser.parse(), quoted: false });
+        continue;
+      }
+
+      if (/[a-zA-Z_]/.test(content[i] ?? "")) {
+        let name = "";
+        while (i < content.length && /[a-zA-Z0-9_]/.test(content[i] ?? "")) {
+          name += content[i];
+          i++;
+        }
+        parts.push({ type: "variable", name, quoted: false });
+        continue;
+      }
+
+      currentText += "$";
     }
 
-    // Flush remaining literal
-    if (currentLiteral) {
-      parts.push({ type: "literal", value: currentLiteral });
-    }
+    pushText();
 
-    if (parts.length === 0) {
-      return { type: "literal", value: "" };
-    }
-    if (parts.length === 1) {
-      return parts[0]!;
-    }
-    return { type: "concat", parts };
+    return {
+      type: "word",
+      parts,
+    };
   }
 
   private parseRedirect(): Redirect {
     const token = this.advance() as Token & { type: "redirect" };
     const mode = token.mode as RedirectMode;
 
-    // 2>&1 and 1>&2 don't have a target
     if (mode === "2>&1" || mode === "1>&2") {
-      return { mode, target: { type: "literal", value: "" } };
+      return { mode, target: this.createTextWord("") };
     }
 
     if (!this.isWordToken()) {

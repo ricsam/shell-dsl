@@ -54,6 +54,21 @@ describe("Glob Expansion", () => {
     expect(result.trim().split(/\s+/).sort()).toEqual(["/files/a.txt", "/files/b.txt"]);
   });
 
+  test("unquoted variable expansions participate in pathname expansion", async () => {
+    const result = await sh`pattern=*.txt && echo $pattern`.text();
+    expect(result.trim().split(/\s+/).sort()).toEqual(["/files/a.txt", "/files/b.txt"]);
+  });
+
+  test("quoted variable expansions do not participate in pathname expansion", async () => {
+    const result = await sh`pattern=*.txt && echo "$pattern"`.text();
+    expect(result.trim()).toBe("*.txt");
+  });
+
+  test("glob characters originating only from quoted segments stay literal", async () => {
+    const result = await sh`echo "*".txt`.text();
+    expect(result.trim()).toBe("*.txt");
+  });
+
   describe("Recursive glob patterns", () => {
     test("** matches files in subdirectories", async () => {
       const result = await sh`echo **/*.txt`.text();

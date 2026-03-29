@@ -9,9 +9,40 @@ export type RedirectMode =
   | "2>&1"
   | "1>&2";
 
+export interface TextPart {
+  type: "text";
+  value: string;
+  quoted: boolean;
+}
+
+export interface VariablePart {
+  type: "variable";
+  name: string;
+  quoted: boolean;
+}
+
+export interface SubstitutionPart {
+  type: "substitution";
+  command: ASTNode;
+  quoted: boolean;
+}
+
+export interface ArithmeticPart {
+  type: "arithmetic";
+  expression: string;
+  quoted: boolean;
+}
+
+export type WordPart = TextPart | VariablePart | SubstitutionPart | ArithmeticPart;
+
+export interface WordNode {
+  type: "word";
+  parts: WordPart[];
+}
+
 export interface Redirect {
   mode: RedirectMode;
-  target: ASTNode;
+  target: WordNode;
   heredocContent?: boolean;
 }
 
@@ -21,24 +52,18 @@ export type ASTNode =
   | AndNode
   | OrNode
   | SequenceNode
-  | LiteralNode
-  | VariableNode
-  | SubstitutionNode
-  | GlobNode
-  | ConcatNode
   | IfNode
   | ForNode
   | WhileNode
   | UntilNode
-  | CaseNode
-  | ArithmeticNode;
+  | CaseNode;
 
 export interface CommandNode {
   type: "command";
-  name: ASTNode;
-  args: ASTNode[];
+  name: WordNode;
+  args: WordNode[];
   redirects: Redirect[];
-  assignments: Array<{ name: string; value: ASTNode }>;
+  assignments: Array<{ name: string; value: WordNode }>;
 }
 
 export interface PipelineNode {
@@ -63,31 +88,6 @@ export interface SequenceNode {
   commands: ASTNode[];
 }
 
-export interface LiteralNode {
-  type: "literal";
-  value: string;
-}
-
-export interface VariableNode {
-  type: "variable";
-  name: string;
-}
-
-export interface SubstitutionNode {
-  type: "substitution";
-  command: ASTNode;
-}
-
-export interface GlobNode {
-  type: "glob";
-  pattern: string;
-}
-
-export interface ConcatNode {
-  type: "concat";
-  parts: ASTNode[];
-}
-
 export interface IfNode {
   type: "if";
   condition: ASTNode;
@@ -99,7 +99,7 @@ export interface IfNode {
 export interface ForNode {
   type: "for";
   variable: string;
-  items: ASTNode[];
+  items: WordNode[];
   body: ASTNode;
 }
 
@@ -116,22 +116,21 @@ export interface UntilNode {
 }
 
 export interface CaseClause {
-  patterns: ASTNode[];
+  patterns: WordNode[];
   body: ASTNode;
 }
 
 export interface CaseNode {
   type: "case";
-  word: ASTNode;
+  word: WordNode;
   clauses: CaseClause[];
 }
 
-export interface ArithmeticNode {
-  type: "arithmetic";
-  expression: string;
+// Type guards
+export function isWordNode(node: ASTNode | WordNode): node is WordNode {
+  return node.type === "word";
 }
 
-// Type guards
 export function isCommandNode(node: ASTNode): node is CommandNode {
   return node.type === "command";
 }
@@ -152,26 +151,6 @@ export function isSequenceNode(node: ASTNode): node is SequenceNode {
   return node.type === "sequence";
 }
 
-export function isLiteralNode(node: ASTNode): node is LiteralNode {
-  return node.type === "literal";
-}
-
-export function isVariableNode(node: ASTNode): node is VariableNode {
-  return node.type === "variable";
-}
-
-export function isSubstitutionNode(node: ASTNode): node is SubstitutionNode {
-  return node.type === "substitution";
-}
-
-export function isGlobNode(node: ASTNode): node is GlobNode {
-  return node.type === "glob";
-}
-
-export function isConcatNode(node: ASTNode): node is ConcatNode {
-  return node.type === "concat";
-}
-
 export function isIfNode(node: ASTNode): node is IfNode {
   return node.type === "if";
 }
@@ -190,8 +169,4 @@ export function isUntilNode(node: ASTNode): node is UntilNode {
 
 export function isCaseNode(node: ASTNode): node is CaseNode {
   return node.type === "case";
-}
-
-export function isArithmeticNode(node: ASTNode): node is ArithmeticNode {
-  return node.type === "arithmetic";
 }

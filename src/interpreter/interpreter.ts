@@ -1,10 +1,19 @@
-import type { ASTNode, CommandNode, Redirect, IfNode, ForNode, WhileNode, UntilNode, CaseNode } from "../parser/ast.ts";
+import type {
+  ASTNode,
+  CommandNode,
+  Redirect,
+  IfNode,
+  ForNode,
+  WhileNode,
+  UntilNode,
+  CaseNode,
+  WordNode,
+  WordPart,
+} from "../parser/ast.ts";
 import type { Command, VirtualFS, ExecResult, OutputCollector, RedirectObjectMap } from "../types.ts";
 import { createCommandContext } from "./context.ts";
 import { createStdin } from "../io/stdin.ts";
 import { createStdout, createStderr, createPipe, PipeBuffer, createBufferTargetCollector } from "../io/stdout.ts";
-import { Lexer } from "../lexer/lexer.ts";
-import { Parser } from "../parser/parser.ts";
 import { isDevNullPath } from "../fs/special-files.ts";
 
 export interface InterpreterOptions {
@@ -15,6 +24,18 @@ export interface InterpreterOptions {
   redirectObjects?: RedirectObjectMap;
   isTTY?: boolean;
 }
+
+interface ExpandedSegment {
+  value: string;
+  quoted: boolean;
+}
+
+interface ExpandedField {
+  segments: ExpandedSegment[];
+}
+
+const DEFAULT_IFS = " \t\n";
+const GLOB_META_CHARS = /[*?[{]/;
 
 // Loop control flow exceptions
 export class BreakException extends Error {
@@ -95,7 +116,7 @@ export class Interpreter {
       case "case":
         return this.executeCase(node, stdinSource, stdout, stderr);
       default:
-        throw new Error(`Cannot execute node type: ${node.type}`);
+        throw new Error("Cannot execute unknown node type");
     }
   }
 
@@ -105,37 +126,21 @@ export class Interpreter {
     stdout: OutputCollector,
     stderr: OutputCollector
   ): Promise<number> {
-    // Create local env with assignments
-    const localEnv = { ...this.env };
+    const assignmentEnv = { ...this.env };
     for (const assignment of node.assignments) {
-      localEnv[assignment.name] = await this.evaluateNode(assignment.value);
+      assignmentEnv[assignment.name] = await this.expandWordScalar(assignment.value, assignmentEnv);
     }
 
-    // If there's no command name but there are assignments, just update env
-    const name = await this.evaluateNode(node.name);
-    if (name === "" && node.assignments.length > 0) {
-      for (const assignment of node.assignments) {
-        this.env[assignment.name] = await this.evaluateNode(assignment.value);
+    const expandedWords = await this.expandCommandWords(node, this.env);
+    const [name, ...args] = expandedWords;
+
+    if (name === undefined || name === "") {
+      if (node.assignments.length > 0) {
+        for (const assignment of node.assignments) {
+          this.env[assignment.name] = assignmentEnv[assignment.name] ?? "";
+        }
       }
       return 0;
-    }
-
-    // Evaluate arguments using localEnv for scoped variable expansion
-    const args: string[] = [];
-    for (const arg of node.args) {
-      const evaluated = await this.evaluateNode(arg, localEnv);
-      // Glob expansion returns multiple values
-      if (arg.type === "glob") {
-        const matches = await this.fs.glob(evaluated, { cwd: this.cwd });
-        if (matches.length > 0) {
-          args.push(...matches);
-        } else {
-          // No matches - use pattern as-is
-          args.push(evaluated);
-        }
-      } else {
-        args.push(evaluated);
-      }
     }
 
     // Handle redirects
@@ -152,7 +157,8 @@ export class Interpreter {
           redirect,
           actualStdin,
           actualStdout,
-          actualStderr
+          actualStderr,
+          this.env
         );
         actualStdin = result.stdin;
         actualStdout = result.stdout;
@@ -163,7 +169,7 @@ export class Interpreter {
           fileWritePromises.push(result.fileWritePromise);
         }
       } catch (err) {
-        const target = await this.evaluateNode(redirect.target);
+        const target = await this.expandWordScalar(redirect.target, this.env);
         const message = err instanceof Error ? err.message : String(err);
         await stderr.writeText(`sh: ${target}: ${message}\n`);
         return 1;
@@ -204,7 +210,7 @@ export class Interpreter {
         stderr: subStderr,
         fs: this.fs,
         cwd: this.cwd,
-        env: { ...localEnv },
+        env: { ...assignmentEnv },
         setCwd: (path: string) => this.setCwd(path),
         exec,
       });
@@ -236,7 +242,7 @@ export class Interpreter {
       stderr: actualStderr,
       fs: this.fs,
       cwd: this.cwd,
-      env: localEnv,
+      env: assignmentEnv,
       setCwd: (path: string) => this.setCwd(path),
       exec,
     });
@@ -270,7 +276,7 @@ export class Interpreter {
       // Find the redirect target for the error message
       const writeRedirects = node.redirects.filter(r => r.mode !== "<" && r.mode !== "2>&1" && r.mode !== "1>&2");
       const target = writeRedirects.length > 0
-        ? await this.evaluateNode(writeRedirects[writeRedirects.length - 1]!.target)
+        ? await this.expandWordScalar(writeRedirects[writeRedirects.length - 1]!.target, this.env)
         : "unknown";
       await stderr.writeText(`sh: ${target}: ${message}\n`);
       exitCode = 1;
@@ -283,7 +289,8 @@ export class Interpreter {
     redirect: Redirect,
     stdin: AsyncIterable<Uint8Array> | null,
     stdout: OutputCollector,
-    stderr: OutputCollector
+    stderr: OutputCollector,
+    env: Record<string, string>
   ): Promise<{
     stdin: AsyncIterable<Uint8Array> | null;
     stdout: OutputCollector;
@@ -292,7 +299,7 @@ export class Interpreter {
     stdoutToStderr?: boolean;
     fileWritePromise?: Promise<void>;
   }> {
-    const target = await this.evaluateNode(redirect.target);
+    const target = await this.expandWordScalar(redirect.target, env);
 
     // Check if target is a redirect object marker
     if (target in this.redirectObjects) {
@@ -611,20 +618,9 @@ export class Interpreter {
     stdout: OutputCollector,
     stderr: OutputCollector
   ): Promise<number> {
-    // Evaluate items and expand globs
     const expandedItems: string[] = [];
     for (const item of node.items) {
-      const evaluated = await this.evaluateNode(item);
-      if (item.type === "glob") {
-        const matches = await this.fs.glob(evaluated, { cwd: this.cwd });
-        if (matches.length > 0) {
-          expandedItems.push(...matches);
-        } else {
-          expandedItems.push(evaluated);
-        }
-      } else {
-        expandedItems.push(evaluated);
-      }
+      expandedItems.push(...(await this.expandWordForCommand(item, this.env)));
     }
 
     // If no items provided, use positional parameters (not implemented, so empty)
@@ -761,11 +757,11 @@ export class Interpreter {
     stdout: OutputCollector,
     stderr: OutputCollector
   ): Promise<number> {
-    const word = await this.evaluateNode(node.word);
+    const word = await this.expandWordScalar(node.word, this.env);
 
     for (const clause of node.clauses) {
       for (const patternNode of clause.patterns) {
-        const pattern = await this.evaluateNode(patternNode);
+        const pattern = await this.expandWordScalar(patternNode, this.env);
 
         if (this.matchCasePattern(word, pattern)) {
           return this.executeNode(clause.body, stdinSource, stdout, stderr);
@@ -816,36 +812,208 @@ export class Interpreter {
     }
   }
 
-  private async evaluateNode(node: ASTNode, localEnv?: Record<string, string>): Promise<string> {
-    const env = localEnv ?? this.env;
-    switch (node.type) {
-      case "literal":
-        return node.value;
-      case "variable":
-        return env[node.name] ?? "";
-      case "glob":
-        return node.pattern;
-      case "concat": {
-        const parts = await Promise.all(node.parts.map((p) => this.evaluateNode(p, localEnv)));
-        return parts.join("");
-      }
-      case "substitution": {
-        // Execute the command and capture output
-        const subStdout = createStdout();
-        const subStderr = createStderr();
-        await this.executeNode(node.command, null, subStdout, subStderr);
-        subStdout.close();
-        const output = await subStdout.collect();
-        // Trim trailing newlines
-        return output.toString("utf-8").replace(/\n+$/, "");
-      }
-      case "arithmetic": {
-        const result = this.evaluateArithmetic(node.expression, env);
-        return String(result);
-      }
-      default:
-        throw new Error(`Cannot evaluate node type: ${node.type}`);
+  private async expandCommandWords(node: CommandNode, env: Record<string, string>): Promise<string[]> {
+    const expanded: string[] = [];
+    for (const word of [node.name, ...node.args]) {
+      expanded.push(...(await this.expandWordForCommand(word, env)));
     }
+    return expanded;
+  }
+
+  private async expandWordForCommand(word: WordNode, env: Record<string, string>): Promise<string[]> {
+    const fields = await this.expandWordFields(word, env);
+    const expanded: string[] = [];
+    for (const field of fields) {
+      expanded.push(...(await this.expandPathname(field)));
+    }
+    return expanded;
+  }
+
+  private async expandWordScalar(word: WordNode, env: Record<string, string>): Promise<string> {
+    let result = "";
+    for (const part of word.parts) {
+      result += await this.expandWordPart(part, env);
+    }
+    return result;
+  }
+
+  private async expandWordFields(word: WordNode, env: Record<string, string>): Promise<ExpandedField[]> {
+    const fields: ExpandedField[] = [this.createExpandedField()];
+    const ifs = this.getIFS(env);
+
+    for (const part of word.parts) {
+      if (part.type === "text") {
+        this.appendSegment(fields[fields.length - 1]!, part.value, part.quoted);
+        continue;
+      }
+
+      const value = await this.expandWordPart(part, env);
+      if (part.quoted) {
+        this.appendSegment(fields[fields.length - 1]!, value, true);
+        continue;
+      }
+
+      const splitFields = this.splitUnquotedExpansion(value, ifs);
+      if (splitFields.length === 0) {
+        continue;
+      }
+
+      this.appendSegment(fields[fields.length - 1]!, splitFields[0]!, false);
+      for (let i = 1; i < splitFields.length; i++) {
+        const field = this.createExpandedField();
+        this.appendSegment(field, splitFields[i]!, false);
+        fields.push(field);
+      }
+    }
+
+    return fields.filter((field) => field.segments.length > 0);
+  }
+
+  private async expandWordPart(part: WordPart, env: Record<string, string>): Promise<string> {
+    switch (part.type) {
+      case "text":
+        return part.value;
+      case "variable":
+        return env[part.name] ?? "";
+      case "substitution":
+        return this.executeSubstitution(part.command, env);
+      case "arithmetic":
+        return String(this.evaluateArithmetic(part.expression, env));
+      default:
+        throw new Error("Cannot expand unknown word part");
+    }
+  }
+
+  private async executeSubstitution(command: ASTNode, env: Record<string, string>): Promise<string> {
+    const interpreter = new Interpreter({
+      fs: this.fs,
+      cwd: this.cwd,
+      env,
+      commands: this.commands,
+      redirectObjects: this.redirectObjects,
+      isTTY: false,
+    });
+    const result = await interpreter.execute(command);
+    return result.stdout.toString("utf-8").replace(/\n+$/, "");
+  }
+
+  private getIFS(env: Record<string, string>): string {
+    return env.IFS ?? DEFAULT_IFS;
+  }
+
+  private splitUnquotedExpansion(value: string, ifs: string): string[] {
+    if (value.length === 0) {
+      return [];
+    }
+    if (ifs === "") {
+      return [value];
+    }
+
+    const ifsChars = new Set(ifs);
+    const isIfsWhitespace = (char: string) =>
+      ifsChars.has(char) && (char === " " || char === "\t" || char === "\n");
+    const isIfsNonWhitespace = (char: string) => ifsChars.has(char) && !isIfsWhitespace(char);
+
+    const fields: string[] = [];
+    let i = 0;
+
+    while (i < value.length && isIfsWhitespace(value[i]!)) {
+      i++;
+    }
+
+    let fieldStart = i;
+    let lastDelimiterWasNonWhitespace = false;
+
+    while (i < value.length) {
+      const char = value[i]!;
+
+      if (isIfsNonWhitespace(char)) {
+        fields.push(value.slice(fieldStart, i));
+        i++;
+        while (i < value.length && isIfsWhitespace(value[i]!)) {
+          i++;
+        }
+        fieldStart = i;
+        lastDelimiterWasNonWhitespace = true;
+        continue;
+      }
+
+      if (isIfsWhitespace(char)) {
+        fields.push(value.slice(fieldStart, i));
+        while (i < value.length && isIfsWhitespace(value[i]!)) {
+          i++;
+        }
+        if (i < value.length && isIfsNonWhitespace(value[i]!)) {
+          i++;
+          while (i < value.length && isIfsWhitespace(value[i]!)) {
+            i++;
+          }
+          lastDelimiterWasNonWhitespace = true;
+        } else {
+          lastDelimiterWasNonWhitespace = false;
+        }
+        fieldStart = i;
+        continue;
+      }
+
+      lastDelimiterWasNonWhitespace = false;
+      i++;
+    }
+
+    if (fieldStart < value.length) {
+      fields.push(value.slice(fieldStart));
+    } else if (lastDelimiterWasNonWhitespace) {
+      fields.push("");
+    }
+
+    return fields;
+  }
+
+  private createExpandedField(): ExpandedField {
+    return { segments: [] };
+  }
+
+  private appendSegment(field: ExpandedField, value: string, quoted: boolean): void {
+    const lastSegment = field.segments[field.segments.length - 1];
+    if (lastSegment && lastSegment.quoted === quoted) {
+      lastSegment.value += value;
+      return;
+    }
+    field.segments.push({ value, quoted });
+  }
+
+  private async expandPathname(field: ExpandedField): Promise<string[]> {
+    if (!this.hasUnquotedGlobMeta(field)) {
+      return [this.fieldToString(field)];
+    }
+
+    const pattern = this.fieldToGlobPattern(field);
+    const matches = await this.fs.glob(pattern, { cwd: this.cwd });
+    return matches.length > 0 ? matches : [this.fieldToString(field)];
+  }
+
+  private hasUnquotedGlobMeta(field: ExpandedField): boolean {
+    return field.segments.some((segment) => !segment.quoted && GLOB_META_CHARS.test(segment.value));
+  }
+
+  private fieldToString(field: ExpandedField): string {
+    return field.segments.map((segment) => segment.value).join("");
+  }
+
+  private fieldToGlobPattern(field: ExpandedField): string {
+    return field.segments
+      .map((segment) => (segment.quoted ? this.escapeLiteralGlobChars(segment.value) : segment.value))
+      .join("");
+  }
+
+  private escapeLiteralGlobChars(value: string): string {
+    return value
+      .replaceAll("[", "[[]")
+      .replaceAll("]", "[]]")
+      .replaceAll("*", "[*]")
+      .replaceAll("?", "[?]")
+      .replaceAll("{", "[{]")
+      .replaceAll("}", "[}]");
   }
 
   private evaluateArithmetic(expression: string, env: Record<string, string>): number {

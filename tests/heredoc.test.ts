@@ -124,13 +124,14 @@ describe("Heredoc", () => {
       const ast = parse(tokens);
       if (ast.type === "command") {
         const target = ast.redirects[0]!.target;
-        expect(target.type).toBe("concat");
-        if (target.type === "concat") {
-          expect(target.parts).toHaveLength(3);
-          expect(target.parts[0]).toEqual({ type: "literal", value: "hello " });
-          expect(target.parts[1]).toEqual({ type: "variable", name: "USER" });
-          expect(target.parts[2]).toEqual({ type: "literal", value: "\n" });
-        }
+        expect(target).toEqual({
+          type: "word",
+          parts: [
+            { type: "text", value: "hello ", quoted: false },
+            { type: "variable", name: "USER", quoted: false },
+            { type: "text", value: "\n", quoted: false },
+          ],
+        });
       }
     });
 
@@ -139,13 +140,14 @@ describe("Heredoc", () => {
       const ast = parse(tokens);
       if (ast.type === "command") {
         const target = ast.redirects[0]!.target;
-        expect(target.type).toBe("concat");
-        if (target.type === "concat") {
-          expect(target.parts).toHaveLength(3);
-          expect(target.parts[0]).toEqual({ type: "literal", value: "hello " });
-          expect(target.parts[1]).toEqual({ type: "variable", name: "USER" });
-          expect(target.parts[2]).toEqual({ type: "literal", value: "!\n" });
-        }
+        expect(target).toEqual({
+          type: "word",
+          parts: [
+            { type: "text", value: "hello ", quoted: false },
+            { type: "variable", name: "USER", quoted: false },
+            { type: "text", value: "!\n", quoted: false },
+          ],
+        });
       }
     });
 
@@ -154,10 +156,10 @@ describe("Heredoc", () => {
       const ast = parse(tokens);
       if (ast.type === "command") {
         const target = ast.redirects[0]!.target;
-        expect(target.type).toBe("literal");
-        if (target.type === "literal") {
-          expect(target.value).toBe("hello $USER\n");
-        }
+        expect(target).toEqual({
+          type: "word",
+          parts: [{ type: "text", value: "hello $USER\n", quoted: true }],
+        });
       }
     });
 

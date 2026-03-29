@@ -8,8 +8,8 @@ describe("Parser", () => {
     const ast = parse(tokens);
     expect(ast).toEqual({
       type: "command",
-      name: { type: "literal", value: "echo" },
-      args: [{ type: "literal", value: "hello" }],
+      name: { type: "word", parts: [{ type: "text", value: "echo", quoted: false }] },
+      args: [{ type: "word", parts: [{ type: "text", value: "hello", quoted: false }] }],
       redirects: [],
       assignments: [],
     });
@@ -54,15 +54,19 @@ describe("Parser", () => {
   test("parses variable expansion", () => {
     const tokens = lex("echo $HOME");
     const ast = parse(tokens);
-    expect((ast as any).args[0].type).toBe("variable");
-    expect((ast as any).args[0].name).toBe("HOME");
+    expect((ast as any).args[0]).toEqual({
+      type: "word",
+      parts: [{ type: "variable", name: "HOME", quoted: false }],
+    });
   });
 
   test("parses glob pattern", () => {
     const tokens = lex("ls *.txt");
     const ast = parse(tokens);
-    expect((ast as any).args[0].type).toBe("glob");
-    expect((ast as any).args[0].pattern).toBe("*.txt");
+    expect((ast as any).args[0]).toEqual({
+      type: "word",
+      parts: [{ type: "text", value: "*.txt", quoted: false }],
+    });
   });
 
   test("parses command with assignments", () => {
@@ -93,6 +97,49 @@ describe("Parser", () => {
   test("parses double quoted strings with concatenation", () => {
     const tokens = lex('echo "hello $USER!"');
     const ast = parse(tokens);
-    expect((ast as any).args[0].type).toBe("concat");
+    expect((ast as any).args[0]).toEqual({
+      type: "word",
+      parts: [
+        { type: "text", value: "hello ", quoted: true },
+        { type: "variable", name: "USER", quoted: true },
+        { type: "text", value: "!", quoted: true },
+      ],
+    });
+  });
+
+  test("preserves quote boundaries across adjacent tokens", () => {
+    const tokens = lex('echo a"$USER"b');
+    const ast = parse(tokens);
+    expect((ast as any).args[0]).toEqual({
+      type: "word",
+      parts: [
+        { type: "text", value: "a", quoted: false },
+        { type: "variable", name: "USER", quoted: true },
+        { type: "text", value: "b", quoted: false },
+      ],
+    });
+  });
+
+  test("single-quoted globs remain quoted text", () => {
+    const tokens = lex("echo '*.txt'");
+    const ast = parse(tokens);
+    expect((ast as any).args[0]).toEqual({
+      type: "word",
+      parts: [{ type: "text", value: "*.txt", quoted: true }],
+    });
+  });
+
+  test("keeps command substitution adjacent to literal suffixes", () => {
+    const tokens = lex("echo $(pwd)suffix");
+    const ast = parse(tokens);
+    expect((ast as any).args[0].type).toBe("word");
+    expect((ast as any).args[0].parts).toHaveLength(2);
+    expect((ast as any).args[0].parts[0].type).toBe("substitution");
+    expect((ast as any).args[0].parts[0].quoted).toBe(false);
+    expect((ast as any).args[0].parts[1]).toEqual({
+      type: "text",
+      value: "suffix",
+      quoted: false,
+    });
   });
 });

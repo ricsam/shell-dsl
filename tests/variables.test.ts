@@ -2,22 +2,27 @@ import { test, expect, describe, beforeEach } from "bun:test";
 import { createFsFromVolume, Volume } from "memfs";
 import { createVirtualFS, createShellDSL } from "../src/index.ts";
 import { builtinCommands } from "../src/commands/index.ts";
+import type { Command } from "../src/types.ts";
 
 describe("Variables", () => {
   let vol: InstanceType<typeof Volume>;
   let sh: ReturnType<typeof createShellDSL>;
+  const defaultEnv = { USER: "testuser", HOME: "/home/testuser", PATH: "/bin:/usr/bin" };
+
+  const createShell = (extraCommands: Record<string, Command> = {}, env: Record<string, string> = {}) => {
+    const memfs = createFsFromVolume(vol);
+    const fs = createVirtualFS(memfs);
+    return createShellDSL({
+      fs,
+      cwd: "/",
+      env: { ...defaultEnv, ...env },
+      commands: { ...builtinCommands, ...extraCommands },
+    });
+  };
 
   beforeEach(() => {
     vol = new Volume();
-    const memfs = createFsFromVolume(vol);
-    const fs = createVirtualFS(memfs);
-
-    sh = createShellDSL({
-      fs,
-      cwd: "/",
-      env: { USER: "testuser", HOME: "/home/testuser", PATH: "/bin:/usr/bin" },
-      commands: builtinCommands,
-    });
+    sh = createShell();
   });
 
   describe("Variable expansion", () => {
@@ -72,9 +77,9 @@ describe("Variables", () => {
   });
 
   describe("Scoped variable assignment", () => {
-    test("FOO=bar echo $FOO expands variable for that command", async () => {
+    test("command words expand against the pre-assignment environment", async () => {
       const result = await sh`FOO=bar echo $FOO`.text();
-      expect(result).toBe("bar\n");
+      expect(result).toBe("\n");
     });
 
     test("scoped variable does not persist after command", async () => {
@@ -83,23 +88,108 @@ describe("Variables", () => {
       expect(result).toBe("\n");
     });
 
-    test("scoped variable overrides global variable for command", async () => {
-      sh.env({ MYVAR: "global" });
-      const result = await sh`MYVAR=scoped echo $MYVAR`.text();
+    test("scoped variable overrides the executed command environment", async () => {
+      const getenv: Command = async (ctx) => {
+        await ctx.stdout.writeText(`${ctx.env[ctx.args[0]!] ?? ""}\n`);
+        return 0;
+      };
+      const scopedSh = createShell({ getenv }, { MYVAR: "global" });
+
+      const result = await scopedSh`MYVAR=scoped getenv MYVAR`.text();
       expect(result).toBe("scoped\n");
-      // Global should still be intact
-      const globalResult = await sh`echo $MYVAR`.text();
+
+      const expansionResult = await scopedSh`MYVAR=scoped echo $MYVAR`.text();
+      expect(expansionResult).toBe("global\n");
+
+      const globalResult = await scopedSh`echo $MYVAR`.text();
       expect(globalResult).toBe("global\n");
     });
 
-    test("multiple scoped variables in one command", async () => {
-      const result = await sh`A=first B=second echo $A $B`.text();
-      expect(result).toBe("first second\n");
+    test("later scoped assignments can read earlier ones", async () => {
+      const getenv: Command = async (ctx) => {
+        await ctx.stdout.writeText(`${ctx.env[ctx.args[0]!] ?? ""}\n`);
+        return 0;
+      };
+      const scopedSh = createShell({ getenv });
+      const result = await scopedSh`A=first B=$A getenv B`.text();
+      expect(result).toBe("first\n");
     });
 
-    test("scoped variable with command substitution", async () => {
-      const result = await sh`MSG=hello echo "message: $MSG"`.text();
-      expect(result).toBe("message: hello\n");
+    test("assignment-only commands still evaluate left-to-right", async () => {
+      const result = await sh`A=first B=$A && echo $B`.text();
+      expect(result).toBe("first\n");
+    });
+
+    test("scoped assignment remains invisible to sibling command substitution", async () => {
+      const result = await sh`MSG=hello echo "message: $(echo $MSG)"`.text();
+      expect(result).toBe("message: \n");
+    });
+  });
+
+  describe("Field splitting", () => {
+    test("unquoted variables split on default IFS whitespace", async () => {
+      const argv: Command = async (ctx) => {
+        await ctx.stdout.writeText(`${JSON.stringify(ctx.args)}\n`);
+        return 0;
+      };
+      const splitSh = createShell({ argv }, { LIST: "alpha beta" });
+      const result = await splitSh`argv $LIST`.text();
+      expect(result).toBe('["alpha","beta"]\n');
+    });
+
+    test("quoted variables do not split", async () => {
+      const argv: Command = async (ctx) => {
+        await ctx.stdout.writeText(`${JSON.stringify(ctx.args)}\n`);
+        return 0;
+      };
+      const splitSh = createShell({ argv }, { LIST: "alpha beta" });
+      const result = await splitSh`argv "$LIST"`.text();
+      expect(result).toBe('["alpha beta"]\n');
+    });
+
+    test("command substitution output is field-split before for loops consume it", async () => {
+      vol.fromJSON({
+        "/backend/migrations/a/snapshot.json": "{}\n",
+        "/backend/migrations/b/snapshot.json": "{}\n",
+      });
+      const result = await sh`
+        for f in $(find /backend/migrations -name "snapshot.json"); do
+          echo $f
+        done
+      `.text();
+      expect(result).toBe(
+        "/backend/migrations/a/snapshot.json\n/backend/migrations/b/snapshot.json\n",
+      );
+    });
+
+    test("custom IFS splits on non-whitespace delimiters and preserves empty fields", async () => {
+      const argv: Command = async (ctx) => {
+        await ctx.stdout.writeText(`${JSON.stringify(ctx.args)}\n`);
+        return 0;
+      };
+      const splitSh = createShell({ argv }, { LIST: "alpha,beta,,gamma", IFS: "," });
+      const result = await splitSh`argv $LIST`.text();
+      expect(result).toBe('["alpha","beta","","gamma"]\n');
+    });
+
+    test("IFS empty disables field splitting", async () => {
+      const argv: Command = async (ctx) => {
+        await ctx.stdout.writeText(`${JSON.stringify(ctx.args)}\n`);
+        return 0;
+      };
+      const splitSh = createShell({ argv }, { LIST: "alpha beta", IFS: "" });
+      const result = await splitSh`argv $LIST`.text();
+      expect(result).toBe('["alpha beta"]\n');
+    });
+
+    test("whitespace-only delimiters do not create empty fields", async () => {
+      const argv: Command = async (ctx) => {
+        await ctx.stdout.writeText(`${JSON.stringify(ctx.args)}\n`);
+        return 0;
+      };
+      const splitSh = createShell({ argv }, { LIST: "  alpha   beta  " });
+      const result = await splitSh`argv $LIST`.text();
+      expect(result).toBe('["alpha","beta"]\n');
     });
   });
 

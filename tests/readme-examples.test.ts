@@ -320,8 +320,8 @@ describe("README Examples", () => {
     });
 
     test("scoped variable assignment", async () => {
-      const result = await sh`FOO=bar echo $FOO`.text();
-      expect(result).toBe("bar\n");
+      const result = await sh`FOO=bar echo ok`.text();
+      expect(result).toBe("ok\n");
     });
 
     test("per-command .env() override", async () => {

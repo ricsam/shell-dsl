@@ -257,7 +257,10 @@ await sh`FOO=bar && echo $FOO`.text();  // "bar\n"
 Assign variables for a single command (scoped):
 
 ```ts
-await sh`FOO=bar echo $FOO`.text();     // "bar\n"
+await sh`FOO=bar echo ok`.text();       // "ok\n"
+await sh`FOO=bar echo $FOO`.text();     // "\n"
+// FOO is available to the executed command via ctx.env,
+// but sibling shell expansion still uses the previous shell env
 // FOO is not set after this command
 ```
 
@@ -326,15 +329,35 @@ const myls: Command = async (ctx) => {
 };
 ```
 
+## Field Splitting
+
+Unquoted parameter, command, and arithmetic expansions follow shell-style word expansion:
+
+1. Expand variables / `$(...)` / `$((...))`
+2. Split unquoted results using `IFS` (default: space, tab, newline)
+3. Apply pathname expansion (globbing) to the resulting fields
+
+Quoted expansions stay single-field, and assignment values plus redirect targets use scalar expansion only.
+
+```ts
+await sh`LIST="alpha beta" && for item in $LIST; do echo $item; done`.text();
+// "alpha\nbeta\n"
+
+await sh`LIST="alpha,beta,,gamma" && IFS=, && for item in $LIST; do echo "[$item]"; done`.text();
+// "[alpha]\n[beta]\n[]\n[gamma]\n"
+```
+
 ## Glob Expansion
 
-Globs are expanded by the interpreter before command execution:
+Globs run after field splitting, and only wildcard characters from unquoted text or unquoted expansions participate:
 
 ```ts
 await sh`ls *.txt`;           // Matches: a.txt, b.txt, ...
 await sh`cat src/**/*.ts`;    // Recursive glob
 await sh`echo file[123].txt`; // Character classes
 await sh`echo {a,b,c}.txt`;   // Brace expansion: a.txt b.txt c.txt
+await sh`pattern='*.txt'; echo $pattern`;   // Expands matches
+await sh`pattern='*.txt'; echo "$pattern"`; // Literal "*.txt"
 ```
 
 ## Command Substitution

@@ -109,6 +109,18 @@ describe("Redirections", () => {
       await sh`cat < /input.txt > /copy.txt`;
       expect(vol.readFileSync("/copy.txt", "utf8")).toBe("hello world");
     });
+
+    test("redirect targets are not field-split", async () => {
+      await sh`TARGET='/space name.txt' && echo hi > $TARGET`;
+      expect(vol.readFileSync("/space name.txt", "utf8")).toBe("hi\n");
+    });
+
+    test("redirect targets are not pathname-expanded", async () => {
+      vol.writeFileSync("/existing.txt", "old");
+      await sh`TARGET='*.txt' && echo literal > $TARGET`;
+      expect(vol.readFileSync("/*.txt", "utf8")).toBe("literal\n");
+      expect(vol.readFileSync("/existing.txt", "utf8")).toBe("old");
+    });
   });
 
   describe("Redirect error handling", () => {

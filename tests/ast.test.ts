@@ -1,44 +1,39 @@
 import { test, expect, describe } from "bun:test";
 import {
+  isWordNode,
   isCommandNode,
   isPipelineNode,
   isAndNode,
   isOrNode,
   isSequenceNode,
-  isLiteralNode,
-  isVariableNode,
-  isSubstitutionNode,
-  isGlobNode,
-  isConcatNode,
   isIfNode,
   isForNode,
   isWhileNode,
   isUntilNode,
   isCaseNode,
-  isArithmeticNode,
   type ASTNode,
   type CommandNode,
   type PipelineNode,
   type AndNode,
   type OrNode,
   type SequenceNode,
-  type LiteralNode,
-  type VariableNode,
-  type SubstitutionNode,
-  type GlobNode,
-  type ConcatNode,
+  type WordNode,
   type IfNode,
   type ForNode,
   type WhileNode,
   type UntilNode,
   type CaseNode,
-  type ArithmeticNode,
 } from "../src/parser/ast.ts";
+
+const textWord = (value: string, quoted = false): WordNode => ({
+  type: "word",
+  parts: value === "" && !quoted ? [] : [{ type: "text", value, quoted }],
+});
 
 describe("AST type guards", () => {
   const commandNode: CommandNode = {
     type: "command",
-    name: { type: "literal", value: "echo" },
+    name: textWord("echo"),
     args: [],
     redirects: [],
     assignments: [],
@@ -66,29 +61,12 @@ describe("AST type guards", () => {
     commands: [commandNode],
   };
 
-  const literalNode: LiteralNode = {
-    type: "literal",
-    value: "hello",
-  };
-
-  const variableNode: VariableNode = {
-    type: "variable",
-    name: "HOME",
-  };
-
-  const substitutionNode: SubstitutionNode = {
-    type: "substitution",
-    command: commandNode,
-  };
-
-  const globNode: GlobNode = {
-    type: "glob",
-    pattern: "*.txt",
-  };
-
-  const concatNode: ConcatNode = {
-    type: "concat",
-    parts: [literalNode, variableNode],
+  const wordNode: WordNode = {
+    type: "word",
+    parts: [
+      { type: "text", value: "hello ", quoted: false },
+      { type: "variable", name: "USER", quoted: false },
+    ],
   };
 
   const ifNode: IfNode = {
@@ -101,7 +79,7 @@ describe("AST type guards", () => {
   const forNode: ForNode = {
     type: "for",
     variable: "i",
-    items: [literalNode],
+    items: [textWord("item")],
     body: commandNode,
   };
 
@@ -119,13 +97,8 @@ describe("AST type guards", () => {
 
   const caseNode: CaseNode = {
     type: "case",
-    word: literalNode,
+    word: textWord("value"),
     clauses: [],
-  };
-
-  const arithmeticNode: ArithmeticNode = {
-    type: "arithmetic",
-    expression: "1 + 2",
   };
 
   const allNodes: ASTNode[] = [
@@ -134,240 +107,104 @@ describe("AST type guards", () => {
     andNode,
     orNode,
     sequenceNode,
-    literalNode,
-    variableNode,
-    substitutionNode,
-    globNode,
-    concatNode,
     ifNode,
     forNode,
     whileNode,
     untilNode,
     caseNode,
-    arithmeticNode,
   ];
 
-  describe("isCommandNode", () => {
-    test("returns true for command node", () => {
-      expect(isCommandNode(commandNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "command") {
-          expect(isCommandNode(node)).toBe(false);
-        }
-      }
-    });
+  test("isWordNode returns true for shell words", () => {
+    expect(isWordNode(wordNode)).toBe(true);
   });
 
-  describe("isPipelineNode", () => {
-    test("returns true for pipeline node", () => {
-      expect(isPipelineNode(pipelineNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "pipeline") {
-          expect(isPipelineNode(node)).toBe(false);
-        }
+  test("isCommandNode identifies commands", () => {
+    expect(isCommandNode(commandNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "command") {
+        expect(isCommandNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isAndNode", () => {
-    test("returns true for and node", () => {
-      expect(isAndNode(andNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "and") {
-          expect(isAndNode(node)).toBe(false);
-        }
+  test("isPipelineNode identifies pipelines", () => {
+    expect(isPipelineNode(pipelineNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "pipeline") {
+        expect(isPipelineNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isOrNode", () => {
-    test("returns true for or node", () => {
-      expect(isOrNode(orNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "or") {
-          expect(isOrNode(node)).toBe(false);
-        }
+  test("isAndNode identifies and nodes", () => {
+    expect(isAndNode(andNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "and") {
+        expect(isAndNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isSequenceNode", () => {
-    test("returns true for sequence node", () => {
-      expect(isSequenceNode(sequenceNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "sequence") {
-          expect(isSequenceNode(node)).toBe(false);
-        }
+  test("isOrNode identifies or nodes", () => {
+    expect(isOrNode(orNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "or") {
+        expect(isOrNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isLiteralNode", () => {
-    test("returns true for literal node", () => {
-      expect(isLiteralNode(literalNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "literal") {
-          expect(isLiteralNode(node)).toBe(false);
-        }
+  test("isSequenceNode identifies sequences", () => {
+    expect(isSequenceNode(sequenceNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "sequence") {
+        expect(isSequenceNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isVariableNode", () => {
-    test("returns true for variable node", () => {
-      expect(isVariableNode(variableNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "variable") {
-          expect(isVariableNode(node)).toBe(false);
-        }
+  test("isIfNode identifies if nodes", () => {
+    expect(isIfNode(ifNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "if") {
+        expect(isIfNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isSubstitutionNode", () => {
-    test("returns true for substitution node", () => {
-      expect(isSubstitutionNode(substitutionNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "substitution") {
-          expect(isSubstitutionNode(node)).toBe(false);
-        }
+  test("isForNode identifies for nodes", () => {
+    expect(isForNode(forNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "for") {
+        expect(isForNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isGlobNode", () => {
-    test("returns true for glob node", () => {
-      expect(isGlobNode(globNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "glob") {
-          expect(isGlobNode(node)).toBe(false);
-        }
+  test("isWhileNode identifies while nodes", () => {
+    expect(isWhileNode(whileNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "while") {
+        expect(isWhileNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isConcatNode", () => {
-    test("returns true for concat node", () => {
-      expect(isConcatNode(concatNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "concat") {
-          expect(isConcatNode(node)).toBe(false);
-        }
+  test("isUntilNode identifies until nodes", () => {
+    expect(isUntilNode(untilNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "until") {
+        expect(isUntilNode(node)).toBe(false);
       }
-    });
+    }
   });
 
-  describe("isIfNode", () => {
-    test("returns true for if node", () => {
-      expect(isIfNode(ifNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "if") {
-          expect(isIfNode(node)).toBe(false);
-        }
+  test("isCaseNode identifies case nodes", () => {
+    expect(isCaseNode(caseNode)).toBe(true);
+    for (const node of allNodes) {
+      if (node.type !== "case") {
+        expect(isCaseNode(node)).toBe(false);
       }
-    });
-  });
-
-  describe("isForNode", () => {
-    test("returns true for for node", () => {
-      expect(isForNode(forNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "for") {
-          expect(isForNode(node)).toBe(false);
-        }
-      }
-    });
-  });
-
-  describe("isWhileNode", () => {
-    test("returns true for while node", () => {
-      expect(isWhileNode(whileNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "while") {
-          expect(isWhileNode(node)).toBe(false);
-        }
-      }
-    });
-  });
-
-  describe("isUntilNode", () => {
-    test("returns true for until node", () => {
-      expect(isUntilNode(untilNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "until") {
-          expect(isUntilNode(node)).toBe(false);
-        }
-      }
-    });
-  });
-
-  describe("isCaseNode", () => {
-    test("returns true for case node", () => {
-      expect(isCaseNode(caseNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "case") {
-          expect(isCaseNode(node)).toBe(false);
-        }
-      }
-    });
-  });
-
-  describe("isArithmeticNode", () => {
-    test("returns true for arithmetic node", () => {
-      expect(isArithmeticNode(arithmeticNode)).toBe(true);
-    });
-
-    test("returns false for other node types", () => {
-      for (const node of allNodes) {
-        if (node.type !== "arithmetic") {
-          expect(isArithmeticNode(node)).toBe(false);
-        }
-      }
-    });
+    }
   });
 });
