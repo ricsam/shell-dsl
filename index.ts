@@ -30,4 +30,5 @@ export {
   awk,
   breakCmd,
   continueCmd,
+  od,
 } from "./src/commands/index.ts";

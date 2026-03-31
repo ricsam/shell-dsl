@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.37
+
+### Patch Changes
+
+- add od
+
 ## 0.0.36
 
 ### Patch Changes
