@@ -1,5 +1,4 @@
 import type { Command } from "../../types.ts";
-import { createFlagParser, type FlagDefinition } from "../../utils/flag-parser.ts";
 import { expandEscapes } from "../../utils/expand-escapes.ts";
 
 interface EchoFlags {
@@ -7,32 +6,43 @@ interface EchoFlags {
   interpretEscapes: boolean;
 }
 
-const spec = {
-  name: "echo",
-  flags: [
-    { short: "n" },
-    { short: "e" },
-  ] as FlagDefinition[],
-  usage: "echo [-neE] [string ...]",
-  stopAfterFirstPositional: true,
-};
-
 const defaults: EchoFlags = { noNewline: false, interpretEscapes: false };
 
-const handler = (flags: EchoFlags, flag: FlagDefinition) => {
-  if (flag.short === "n") flags.noNewline = true;
-  if (flag.short === "e") flags.interpretEscapes = true;
-};
+function isEchoOption(arg: string): boolean {
+  if (!arg.startsWith("-") || arg === "-") {
+    return false;
+  }
 
-const parser = createFlagParser(spec, defaults, handler);
+  for (const char of arg.slice(1)) {
+    if (char !== "n" && char !== "e" && char !== "E") {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function parseEchoArgs(args: string[]): { flags: EchoFlags; args: string[] } {
+  const flags = { ...defaults };
+  let index = 0;
+
+  // Match common shell echo behavior: only leading -n/-e/-E clusters are
+  // treated as options. Anything else, including "--" and "--invalid", is
+  // printed literally.
+  while (index < args.length && isEchoOption(args[index]!)) {
+    for (const char of args[index]!.slice(1)) {
+      if (char === "n") flags.noNewline = true;
+      if (char === "e") flags.interpretEscapes = true;
+      if (char === "E") flags.interpretEscapes = false;
+    }
+    index++;
+  }
+
+  return { flags, args: args.slice(index) };
+}
 
 export const echo: Command = async (ctx) => {
-  const result = parser.parse(ctx.args);
-
-  if (result.error) {
-    await parser.writeError(result.error, ctx.stderr);
-    return 1;
-  }
+  const result = parseEchoArgs(ctx.args);
 
   let output = result.args.join(" ");
 

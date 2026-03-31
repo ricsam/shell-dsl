@@ -45,6 +45,11 @@ describe("echo command", () => {
       const result = await sh`echo "---"`.text();
       expect(result).toBe("---\n");
     });
+
+    test("treats quoted text that starts with hyphens as literal text", async () => {
+      const result = await sh`echo "--- root ---"`.text();
+      expect(result).toBe("--- root ---\n");
+    });
   });
 
   describe("-n flag (no newline)", () => {
@@ -96,21 +101,27 @@ describe("echo command", () => {
       const result = await sh`echo 'hello\\nworld'`.text();
       expect(result).toBe("hello\\nworld\n");
     });
+
+    test("-E disables escape interpretation", async () => {
+      const result = await sh`echo -e -E 'hello\\nworld'`.text();
+      expect(result).toBe("hello\\nworld\n");
+    });
   });
 
-  describe("Invalid Flags", () => {
-    test("invalid short flag returns error with usage", async () => {
-      const result = await sh`echo -x hello`.nothrow();
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr.toString()).toContain("invalid option");
-      expect(result.stderr.toString()).toContain("usage:");
+  describe("Option-like Arguments", () => {
+    test("treats unknown short flags as literal text", async () => {
+      const result = await sh`echo -x hello`.text();
+      expect(result).toBe("-x hello\n");
     });
 
-    test("invalid long flag returns error with usage", async () => {
-      const result = await sh`echo --invalid hello`.nothrow();
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr.toString()).toContain("unrecognized option");
-      expect(result.stderr.toString()).toContain("usage:");
+    test("treats long-option-like arguments as literal text", async () => {
+      const result = await sh`echo --invalid hello`.text();
+      expect(result).toBe("--invalid hello\n");
+    });
+
+    test("treats -- as literal text", async () => {
+      const result = await sh`echo -- hello`.text();
+      expect(result).toBe("-- hello\n");
     });
   });
 });
