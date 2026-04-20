@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.38
+
+### Patch Changes
+
+- more flags to find / tree
+
 ## 0.0.37
 
 ### Patch Changes

@@ -125,6 +125,24 @@ describe("tree command", () => {
     expect(result).toContain("0 directories, 1 file");
   });
 
+  test("--noreport omits directory summary", async () => {
+    const result = await sh`tree --noreport /mydir`.text();
+    expect(result).toContain("/mydir");
+    expect(result).toContain("file1.txt");
+    expect(result).not.toMatch(/\n\d+ directories?, \d+ files?\n$/);
+  });
+
+  test("--noreport on empty directory prints only the root", async () => {
+    vol.mkdirSync("/emptydir");
+    const result = await sh`tree --noreport /emptydir`.text();
+    expect(result).toBe("/emptydir\n");
+  });
+
+  test("--noreport on file path prints only the file", async () => {
+    const result = await sh`tree --noreport /single.txt`.text();
+    expect(result).toBe("/single.txt\n");
+  });
+
   test("summary line format for multiple items", async () => {
     const result = await sh`tree /mydir`.text();
     // Should end with summary line

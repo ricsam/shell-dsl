@@ -8,6 +8,7 @@ interface TreeFlags {
   maxDepth: number;
   dirsfirst: boolean;
   prune: boolean;
+  noReport: boolean;
   ignorePatterns: string[];
 }
 
@@ -20,8 +21,9 @@ const spec = {
     { short: "I", takesValue: true },
     { long: "dirsfirst" },
     { long: "prune" },
+    { long: "noreport" },
   ] as FlagDefinition[],
-  usage: "tree [-adI] [-L level] [-I pattern] [--dirsfirst] [--prune] [directory ...]",
+  usage: "tree [-adI] [-L level] [-I pattern] [--dirsfirst] [--prune] [--noreport] [directory ...]",
 };
 
 const defaults: TreeFlags = {
@@ -30,6 +32,7 @@ const defaults: TreeFlags = {
   maxDepth: Infinity,
   dirsfirst: true,
   prune: false,
+  noReport: false,
   ignorePatterns: [],
 };
 
@@ -44,6 +47,7 @@ const handler = (flags: TreeFlags, flag: FlagDefinition, value?: string) => {
   if (flag.short === "d") flags.directoriesOnly = true;
   if (flag.long === "dirsfirst") flags.dirsfirst = true;
   if (flag.long === "prune") flags.prune = true;
+  if (flag.long === "noreport") flags.noReport = true;
   if (flag.short === "I" && value) {
     if (flags.ignorePatterns === defaults.ignorePatterns) {
       flags.ignorePatterns = [];
@@ -78,7 +82,7 @@ export const tree: Command = async (ctx) => {
     return 1;
   }
 
-  const { all: showAll, directoriesOnly, maxDepth, prune, ignorePatterns } = result.flags;
+  const { all: showAll, directoriesOnly, maxDepth, prune, noReport, ignorePatterns } = result.flags;
   const targetPath = result.args[0] ?? ".";
 
   // Validate maxDepth
@@ -100,7 +104,7 @@ export const tree: Command = async (ctx) => {
 
   // If it's a file, just print the filename
   if (stat.isFile()) {
-    await ctx.stdout.writeText(targetPath + "\n\n0 directories, 1 file\n");
+    await ctx.stdout.writeText(noReport ? targetPath + "\n" : targetPath + "\n\n0 directories, 1 file\n");
     return 0;
   }
 
@@ -216,10 +220,12 @@ export const tree: Command = async (ctx) => {
 
   await printTree(resolvedPath, "", 1);
 
-  // Print summary
-  const dirWord = dirCount === 1 ? "directory" : "directories";
-  const fileWord = fileCount === 1 ? "file" : "files";
-  await ctx.stdout.writeText(`\n${dirCount} ${dirWord}, ${fileCount} ${fileWord}\n`);
+  if (!noReport) {
+    // Print summary
+    const dirWord = dirCount === 1 ? "directory" : "directories";
+    const fileWord = fileCount === 1 ? "file" : "files";
+    await ctx.stdout.writeText(`\n${dirCount} ${dirWord}, ${fileCount} ${fileWord}\n`);
+  }
 
   return 0;
 };

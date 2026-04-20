@@ -408,6 +408,56 @@ describe("find command", () => {
     });
   });
 
+  describe("-print action", () => {
+    test("-print explicitly prints matching paths", async () => {
+      const defaultOutput = await sh`find /data`.text();
+      const printOutput = await sh`find /data -print`.text();
+      expect(printOutput).toBe(defaultOutput);
+    });
+
+    test("-name with -print prints only matching paths", async () => {
+      const result = await sh`find /data -name "*.txt" -print`.text();
+      const lines = result.trim().split("\n");
+      expect(lines).toContain("/data/file1.txt");
+      expect(lines).toContain("/data/file2.txt");
+      expect(lines).toContain("/data/subdir/nested.txt");
+      expect(lines).not.toContain("/data/file3.TXT");
+      expect(lines).not.toContain("/data/subdir/other.log");
+    });
+
+    test("-print suppresses implicit default printing across OR branches", async () => {
+      const result = await sh`find /data -name "*.txt" -print -o -name "*.log"`.text();
+      const lines = result.trim().split("\n").sort();
+      expect(lines).toEqual([
+        "/data/file1.txt",
+        "/data/file2.txt",
+        "/data/subdir/nested.txt",
+      ]);
+    });
+
+    test("-mindepth and -maxdepth gate -print actions", async () => {
+      const result = await sh`find /data -mindepth 1 -maxdepth 1 -print`.text();
+      const lines = result.trim().split("\n").sort();
+      expect(lines).toEqual([
+        "/data/file1.txt",
+        "/data/file2.txt",
+        "/data/file3.TXT",
+        "/data/subdir",
+      ]);
+    });
+
+    test("-mindepth gates -exec actions", async () => {
+      const result = await sh`find /data -mindepth 1 -maxdepth 1 -exec echo {} \\;`.text();
+      const lines = result.trim().split("\n").sort();
+      expect(lines).toEqual([
+        "/data/file1.txt",
+        "/data/file2.txt",
+        "/data/file3.TXT",
+        "/data/subdir",
+      ]);
+    });
+  });
+
   describe("-o (OR) operator", () => {
     test("finds files matching either pattern", async () => {
       const result = await sh`find /data -name "*.txt" -o -name "*.log"`.text();

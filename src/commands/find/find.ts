@@ -9,6 +9,7 @@ type FindExpr =
   | { type: "or"; left: FindExpr; right: FindExpr }
   | { type: "not"; expr: FindExpr }
   | { type: "true" }
+  | { type: "print" }
   | { type: "exec"; cmdName: string; cmdArgs: string[]; batchMode: boolean };
 
 async function evalExpr(
@@ -18,6 +19,7 @@ async function evalExpr(
   isDir: boolean,
   entryPath: string,
   ctx: CommandContext,
+  runActions: boolean,
 ): Promise<boolean> {
   switch (expr.type) {
     case "true":
@@ -27,20 +29,28 @@ async function evalExpr(
     case "ftype":
       return expr.value === "f" ? isFile : isDir;
     case "and": {
-      const leftResult = await evalExpr(expr.left, basename, isFile, isDir, entryPath, ctx);
+      const leftResult = await evalExpr(expr.left, basename, isFile, isDir, entryPath, ctx, runActions);
       if (!leftResult) return false;
-      return evalExpr(expr.right, basename, isFile, isDir, entryPath, ctx);
+      return evalExpr(expr.right, basename, isFile, isDir, entryPath, ctx, runActions);
     }
     case "or": {
-      const leftResult = await evalExpr(expr.left, basename, isFile, isDir, entryPath, ctx);
+      const leftResult = await evalExpr(expr.left, basename, isFile, isDir, entryPath, ctx, runActions);
       if (leftResult) return true;
-      return evalExpr(expr.right, basename, isFile, isDir, entryPath, ctx);
+      return evalExpr(expr.right, basename, isFile, isDir, entryPath, ctx, runActions);
     }
     case "not":
-      return !(await evalExpr(expr.expr, basename, isFile, isDir, entryPath, ctx));
+      return !(await evalExpr(expr.expr, basename, isFile, isDir, entryPath, ctx, runActions));
+    case "print":
+      if (runActions) {
+        await ctx.stdout.writeText(entryPath + "\n");
+      }
+      return true;
     case "exec": {
       if (expr.batchMode) {
         // In batch mode, always return true during traversal; paths are collected externally
+        return true;
+      }
+      if (!runActions) {
         return true;
       }
       // Per-file mode: execute command with {} replaced by entryPath
@@ -65,6 +75,7 @@ async function evalExpr(
 /** Check if expression tree contains any -exec node */
 function hasActionExpr(expr: FindExpr): boolean {
   switch (expr.type) {
+    case "print":
     case "exec":
       return true;
     case "and":
@@ -220,6 +231,11 @@ function parseExprArgs(args: string[]): FindExpr {
       return { type: "exec", cmdName, cmdArgs, batchMode };
     }
 
+    if (tok === "-print") {
+      advance();
+      return { type: "print" };
+    }
+
     throw new ParseError(`find: unknown predicate '${tok}'`);
   }
 
@@ -336,11 +352,12 @@ export const find: Command = async (ctx) => {
       const isDir = entryStat.isDirectory();
       const isFile = entryStat.isFile();
       const basename = ctx.fs.basename(path);
+      const meetsMinDepth = minDepth === undefined || depth >= minDepth;
 
       // Check if this entry matches the expression
-      const matches = await evalExpr(expr, basename, isFile, isDir, displayPath, ctx);
+      const matches = await evalExpr(expr, basename, isFile, isDir, displayPath, ctx, meetsMinDepth);
 
-      if (matches && (minDepth === undefined || depth >= minDepth)) {
+      if (matches && meetsMinDepth) {
         if (batchExecNodes.length > 0) {
           batchPaths.push(displayPath);
         } else if (!hasAction) {
@@ -369,11 +386,12 @@ export const find: Command = async (ctx) => {
     // Start traversal
     if (stat.isFile()) {
       const basename = ctx.fs.basename(resolvedStart);
-      const matches = await evalExpr(expr, basename, true, false, normalizedPath, ctx);
+      const meetsMinDepth = minDepth === undefined || minDepth <= 0;
+      const matches = await evalExpr(expr, basename, true, false, normalizedPath, ctx, meetsMinDepth);
 
       if (maxDepth !== undefined && maxDepth < 0) {
         // skip
-      } else if (matches && (minDepth === undefined || minDepth <= 0)) {
+      } else if (matches && meetsMinDepth) {
         if (batchExecNodes.length > 0) {
           batchPaths.push(normalizedPath);
         } else if (!hasAction) {
