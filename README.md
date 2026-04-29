@@ -567,12 +567,13 @@ import { builtinCommands } from "shell-dsl/commands";
 Or import individually:
 
 ```ts
-import { echo, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk, cut, od } from "shell-dsl/commands";
+import { echo, printf, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk, cut, od } from "shell-dsl/commands";
 ```
 
 | Command | Description |
 |---------|-------------|
 | `echo` | Print arguments to stdout |
+| `printf` | Format output without an implicit trailing newline (`%s`, `%b`, numeric formats, escapes) |
 | `cat` | Concatenate files or stdin to stdout |
 | `grep` | Linux-compatible pattern search |
 | `wc` | Count lines, words, or characters (`-l`, `-w`, `-c`) |

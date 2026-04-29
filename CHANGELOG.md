@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.39
+
+### Patch Changes
+
+- add printf
+
 ## 0.0.38
 
 ### Patch Changes

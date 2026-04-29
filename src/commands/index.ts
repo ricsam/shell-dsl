@@ -1,6 +1,7 @@
 import type { Command } from "../types.ts";
 
 export { echo } from "./echo/echo.ts";
+export { printf } from "./printf/printf.ts";
 export { cat } from "./cat/cat.ts";
 export { grep } from "./grep/grep.ts";
 export { wc } from "./wc/wc.ts";
@@ -31,6 +32,7 @@ export { od } from "./od/od.ts";
 
 // Re-export all commands as a bundle
 import { echo } from "./echo/echo.ts";
+import { printf } from "./printf/printf.ts";
 import { cat } from "./cat/cat.ts";
 import { grep } from "./grep/grep.ts";
 import { wc } from "./wc/wc.ts";
@@ -61,6 +63,7 @@ import { od } from "./od/od.ts";
 
 export const builtinCommands: Record<string, Command> = {
   echo,
+  printf,
   cat,
   grep,
   wc,

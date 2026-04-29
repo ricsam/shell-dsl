@@ -5,6 +5,7 @@ export * from "./src/index.ts";
 export { builtinCommands } from "./src/commands/index.ts";
 export {
   echo,
+  printf,
   cat,
   grep,
   wc,
