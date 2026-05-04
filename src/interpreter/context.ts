@@ -1,4 +1,13 @@
-import type { CommandContext, VirtualFS, Stdin, Stdout, Stderr, ExecResult, ShellCommandApi } from "../types.ts";
+import type {
+  CommandContext,
+  VirtualFS,
+  Stdin,
+  Stdout,
+  Stderr,
+  ExecResult,
+  ShellCommandApi,
+  TerminalInfo,
+} from "../types.ts";
 
 export interface ContextOptions {
   args: string[];
@@ -8,6 +17,8 @@ export interface ContextOptions {
   fs: VirtualFS;
   cwd: string;
   env: Record<string, string>;
+  terminal: TerminalInfo;
+  signal: AbortSignal;
   setCwd: (path: string) => void;
   exec?: (name: string, args: string[]) => Promise<ExecResult>;
   shell?: ShellCommandApi;
@@ -22,6 +33,8 @@ export function createCommandContext(options: ContextOptions): CommandContext {
     fs: options.fs,
     cwd: options.cwd,
     env: options.env,
+    terminal: options.terminal,
+    signal: options.signal,
     setCwd: options.setCwd,
   };
   if (options.exec) {

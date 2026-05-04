@@ -7,9 +7,11 @@ export class OutputCollectorImpl implements OutputCollector {
   private resolveWait: (() => void) | null = null;
   private waitPromise: Promise<void> | null = null;
   public isTTY: boolean;
+  private onWrite?: (chunk: Uint8Array) => void | Promise<void>;
 
-  constructor(isTTY: boolean = false) {
+  constructor(isTTY: boolean = false, onWrite?: (chunk: Uint8Array) => void | Promise<void>) {
     this.isTTY = isTTY;
+    this.onWrite = onWrite;
   }
 
   async write(chunk: Uint8Array): Promise<void> {
@@ -17,6 +19,7 @@ export class OutputCollectorImpl implements OutputCollector {
       throw new Error("Output stream is closed");
     }
     this.chunks.push(chunk);
+    await this.onWrite?.(chunk);
     if (this.resolveWait) {
       this.resolveWait();
       this.resolveWait = null;
@@ -138,12 +141,18 @@ export class PipeBuffer implements OutputCollector, Stdout {
   }
 }
 
-export function createStdout(isTTY: boolean = false): OutputCollector {
-  return new OutputCollectorImpl(isTTY);
+export function createStdout(
+  isTTY: boolean = false,
+  onWrite?: (chunk: Uint8Array) => void | Promise<void>
+): OutputCollector {
+  return new OutputCollectorImpl(isTTY, onWrite);
 }
 
-export function createStderr(isTTY: boolean = false): OutputCollector {
-  return new OutputCollectorImpl(isTTY);
+export function createStderr(
+  isTTY: boolean = false,
+  onWrite?: (chunk: Uint8Array) => void | Promise<void>
+): OutputCollector {
+  return new OutputCollectorImpl(isTTY, onWrite);
 }
 
 export function createPipe(): PipeBuffer {

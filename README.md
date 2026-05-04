@@ -339,6 +339,72 @@ const myls: Command = async (ctx) => {
 };
 ```
 
+## Streaming Sessions
+
+Use `createShellSession()` when you want a stateful, streaming shell runtime for a terminal, agent console, or other UI. A session preserves shell state across runs, including `cwd`, environment changes, and `$?`:
+
+```ts
+import { createShellInput, createShellSession, createVirtualFS } from "shell-dsl";
+import { builtinCommands } from "shell-dsl/commands";
+
+const session = createShellSession({
+  fs,
+  cwd: "/",
+  env: {},
+  commands: builtinCommands,
+  terminal: { isTTY: true, columns: 100, rows: 30 },
+});
+
+await session.run("cd /work").exit;
+
+const execution = session.run("pwd; echo hello");
+for await (const event of execution.output) {
+  const stream = event.fd === 1 ? process.stdout : process.stderr;
+  stream.write(event.chunk);
+}
+
+const result = await execution.exit;
+console.log(result.exitCode);
+```
+
+For interactive input, create a writable async stdin source:
+
+```ts
+const stdin = createShellInput();
+const execution = session.run("cat", { stdin });
+
+await stdin.write("hello\n");
+stdin.close();
+await execution.exit;
+```
+
+Unknown commands can be delegated to a runtime-specific adapter without making shell-dsl spawn processes itself:
+
+```ts
+const session = createShellSession({
+  fs,
+  cwd: "/",
+  env: {},
+  commands: builtinCommands,
+  externalCommand: async (ctx) => {
+    await ctx.stderr.writeText(`${ctx.name}: not implemented by this host\n`);
+    return 127;
+  },
+});
+```
+
+Use `analyzeInput(source)` before running user-entered text to distinguish complete commands from multiline input such as unclosed quotes, heredocs, trailing pipes, and compound statements.
+
+## Terminal Demo
+
+This repository includes a Bun-powered terminal demo:
+
+```bash
+bun examples/terminal/shell-cli.ts
+```
+
+The CLI process uses `node:readline/promises`, so normal prompt editing such as Ctrl+A, Ctrl+E, arrow-key movement, and history are handled by your terminal/readline layer. Tab completion is served by the executor process and includes registered shell-dsl command names plus paths in the virtual filesystem. The demo spawns `shell-executor.ts` with Bun and exchanges JSON-lines messages over stdio. Full raw PTY behavior for interactive child programs is intentionally left to demo or host runtime code rather than shell-dsl core.
+
 ## Field Splitting
 
 Unquoted parameter, command, and arithmetic expansions follow shell-style word expansion:

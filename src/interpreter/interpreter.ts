@@ -10,12 +10,26 @@ import type {
   WordNode,
   WordPart,
 } from "../parser/ast.ts";
-import type { Command, VirtualFS, ExecResult, OutputCollector, RedirectObjectMap, ShellCommandApi } from "../types.ts";
+import type {
+  Command,
+  VirtualFS,
+  ExecResult,
+  OutputCollector,
+  RedirectObjectMap,
+  ShellCommandApi,
+  TerminalInfo,
+  ShellExecutionOptions,
+  ShellExecution,
+  ShellInputSource,
+  ShellOutputEvent,
+  ShellCommandFallback,
+} from "../types.ts";
 import { createCommandContext } from "./context.ts";
 import { Lexer } from "../lexer/lexer.ts";
 import { Parser } from "../parser/parser.ts";
 import { createStdin } from "../io/stdin.ts";
 import { createStdout, createStderr, createPipe, PipeBuffer, createBufferTargetCollector } from "../io/stdout.ts";
+import { AsyncQueue } from "../io/async-queue.ts";
 import { isDevNullPath } from "../fs/special-files.ts";
 
 export interface InterpreterOptions {
@@ -25,6 +39,9 @@ export interface InterpreterOptions {
   commands: Record<string, Command>;
   redirectObjects?: RedirectObjectMap;
   isTTY?: boolean;
+  terminal?: TerminalInfo;
+  externalCommand?: ShellCommandFallback;
+  signal?: AbortSignal;
   argv0?: string;
   positionalParameters?: string[];
   lastExitCode?: number;
@@ -69,6 +86,9 @@ export class Interpreter {
   private redirectObjects: RedirectObjectMap;
   private loopDepth: number = 0;
   private isTTY: boolean;
+  private terminal: TerminalInfo;
+  private activeSignal: AbortSignal;
+  private externalCommand?: ShellCommandFallback;
   private argv0: string;
   private positionalParameters: string[];
   private lastExitCode: number;
@@ -79,7 +99,10 @@ export class Interpreter {
     this.env = { ...options.env };
     this.commands = options.commands;
     this.redirectObjects = options.redirectObjects ?? {};
-    this.isTTY = options.isTTY ?? false;
+    this.terminal = options.terminal ?? { isTTY: options.isTTY ?? false };
+    this.isTTY = this.terminal.isTTY;
+    this.activeSignal = options.signal ?? new AbortController().signal;
+    this.externalCommand = options.externalCommand;
     this.argv0 = options.argv0 ?? "sh";
     this.positionalParameters = [...(options.positionalParameters ?? [])];
     this.lastExitCode = options.lastExitCode ?? 0;
@@ -90,28 +113,95 @@ export class Interpreter {
   }
 
   async execute(ast: ASTNode): Promise<ExecResult> {
-    const stdout = createStdout(this.isTTY);
-    const stderr = createStderr(this.isTTY);
+    return this.executeStreaming(ast).exit;
+  }
 
-    let exitCode: number;
-    try {
-      exitCode = await this.executeNode(ast, null, stdout, stderr);
-    } catch (err) {
-      if (!(err instanceof ExitException)) {
-        throw err;
+  executeStreaming(ast: ASTNode, options: ShellExecutionOptions = {}): ShellExecution {
+    const terminal = options.terminal ?? this.terminal;
+    const controller = new AbortController();
+    const eventQueue = new AsyncQueue<ShellOutputEvent>();
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        controller.abort(options.signal.reason);
+      } else {
+        options.signal.addEventListener("abort", () => controller.abort(options.signal?.reason), { once: true });
       }
-      exitCode = err.exitCode;
-      this.lastExitCode = exitCode;
     }
 
-    stdout.close();
-    stderr.close();
+    const stdout = createStdout(terminal.isTTY, async (chunk) => {
+      eventQueue.push({ fd: 1, chunk });
+      await options.stdout?.write(chunk);
+    });
+    const stderr = createStderr(terminal.isTTY, async (chunk) => {
+      eventQueue.push({ fd: 2, chunk });
+      await options.stderr?.write(chunk);
+    });
+
+    const previousSignal = this.activeSignal;
+    const previousTerminal = this.terminal;
+    const previousIsTTY = this.isTTY;
+    const stdinSource = this.normalizeInputSource(options.stdin);
+
+    const exit = (async (): Promise<ExecResult> => {
+      this.activeSignal = controller.signal;
+      this.terminal = terminal;
+      this.isTTY = terminal.isTTY;
+
+      let exitCode: number;
+      try {
+        this.throwIfAborted();
+        exitCode = await this.executeNode(ast, stdinSource, stdout, stderr);
+      } catch (err) {
+        if (err instanceof ExitException) {
+          exitCode = err.exitCode;
+        } else if (controller.signal.aborted) {
+          exitCode = 130;
+        } else {
+          throw err;
+        }
+      } finally {
+        stdout.close();
+        stderr.close();
+        eventQueue.close();
+        this.activeSignal = previousSignal;
+        this.terminal = previousTerminal;
+        this.isTTY = previousIsTTY;
+      }
+
+      this.lastExitCode = exitCode;
+
+      return {
+        stdout: await stdout.collect(),
+        stderr: await stderr.collect(),
+        exitCode,
+      };
+    })();
 
     return {
-      stdout: await stdout.collect(),
-      stderr: await stderr.collect(),
-      exitCode,
+      stdout: stdout.getReadableStream(),
+      stderr: stderr.getReadableStream(),
+      output: eventQueue,
+      exit,
+      kill: (reason?: unknown) => controller.abort(reason ?? new Error("Shell execution killed")),
     };
+  }
+
+  private normalizeInputSource(source: ShellInputSource | undefined): AsyncIterable<Uint8Array> | null {
+    if (source === undefined || source === null) {
+      return null;
+    }
+    if (typeof source === "string") {
+      return (async function* () {
+        yield new TextEncoder().encode(source);
+      })();
+    }
+    if (Buffer.isBuffer(source)) {
+      return (async function* () {
+        yield new Uint8Array(source);
+      })();
+    }
+    return source;
   }
 
   private async executeNode(
@@ -120,6 +210,7 @@ export class Interpreter {
     stdout: OutputCollector,
     stderr: OutputCollector
   ): Promise<number> {
+    this.throwIfAborted();
     let exitCode: number;
     switch (node.type) {
       case "command":
@@ -157,6 +248,12 @@ export class Interpreter {
     }
     this.lastExitCode = exitCode;
     return exitCode;
+  }
+
+  private throwIfAborted(): void {
+    if (this.activeSignal.aborted) {
+      throw this.activeSignal.reason ?? new Error("Shell execution aborted");
+    }
   }
 
   private async executeCommand(
@@ -271,11 +368,64 @@ export class Interpreter {
     }
 
     if (name.includes("/")) {
+      const resolved = this.fs.resolve(this.cwd, name);
+      if (await this.fs.exists(resolved)) {
+        return this.executeExecutableFile(name, args, stdinSource, stdout, stderr, env);
+      }
+      if (this.externalCommand) {
+        return this.invokeExternalCommand(name, args, stdinSource, stdout, stderr, env);
+      }
       return this.executeExecutableFile(name, args, stdinSource, stdout, stderr, env);
+    }
+
+    if (this.externalCommand) {
+      return this.invokeExternalCommand(name, args, stdinSource, stdout, stderr, env);
     }
 
     await stderr.writeText(`${name}: command not found\n`);
     return 127;
+  }
+
+  private async invokeExternalCommand(
+    name: string,
+    args: string[],
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector,
+    env: Record<string, string>
+  ): Promise<number> {
+    if (!this.externalCommand) {
+      return 127;
+    }
+
+    const ctx = createCommandContext({
+      args,
+      stdin: createStdin(stdinSource),
+      stdout,
+      stderr,
+      fs: this.fs,
+      cwd: this.cwd,
+      env,
+      terminal: this.terminal,
+      signal: this.activeSignal,
+      setCwd: (path: string) => this.setCwd(path),
+      exec: this.createExec(env),
+      shell: this.createShellApi(stdinSource, stdout, stderr, env),
+    });
+
+    try {
+      return await this.externalCommand({ ...ctx, name });
+    } catch (err) {
+      if (err instanceof BreakException || err instanceof ContinueException || err instanceof ExitException) {
+        throw err;
+      }
+      if (this.activeSignal.aborted) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      await stderr.writeText(`${name}: ${message}\n`);
+      return 1;
+    }
   }
 
   private async invokeRegisteredCommand(
@@ -297,6 +447,8 @@ export class Interpreter {
       fs: this.fs,
       cwd: this.cwd,
       env,
+      terminal: this.terminal,
+      signal: this.activeSignal,
       setCwd: (path: string) => this.setCwd(path),
       exec,
       shell,
@@ -399,7 +551,9 @@ export class Interpreter {
       env: { ...env },
       commands: this.commands,
       redirectObjects: this.redirectObjects,
-      isTTY: this.isTTY,
+      terminal: this.terminal,
+      externalCommand: this.externalCommand,
+      signal: this.activeSignal,
       argv0: shebang.command,
       positionalParameters: [],
     });
@@ -452,7 +606,9 @@ export class Interpreter {
       env: { ...env },
       commands: this.commands,
       redirectObjects: this.redirectObjects,
-      isTTY: this.isTTY,
+      terminal: this.terminal,
+      externalCommand: this.externalCommand,
+      signal: this.activeSignal,
       argv0,
       positionalParameters: args,
     });
@@ -1225,6 +1381,8 @@ export class Interpreter {
       commands: this.commands,
       redirectObjects: this.redirectObjects,
       isTTY: false,
+      externalCommand: this.externalCommand,
+      signal: this.activeSignal,
       argv0: this.argv0,
       positionalParameters: this.positionalParameters,
       lastExitCode: this.lastExitCode,
@@ -1550,5 +1708,9 @@ export class Interpreter {
 
   getEnv(): Record<string, string> {
     return { ...this.env };
+  }
+
+  getLastExitCode(): number {
+    return this.lastExitCode;
   }
 }

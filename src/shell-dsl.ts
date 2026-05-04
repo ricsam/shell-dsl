@@ -1,4 +1,12 @@
-import type { ShellConfig, Command, VirtualFS, ExecResult, RedirectObjectMap } from "./types.ts";
+import type {
+  ShellConfig,
+  Command,
+  VirtualFS,
+  ExecResult,
+  RedirectObjectMap,
+  TerminalInfo,
+  ShellCommandFallback,
+} from "./types.ts";
 import { isRawValue, isRedirectObject } from "./types.ts";
 import type { Token } from "./lexer/tokens.ts";
 import type { ASTNode } from "./parser/ast.ts";
@@ -22,6 +30,8 @@ export class ShellDSL {
   private commands: Record<string, Command>;
   private shouldThrow: boolean = true;
   private isTTY: boolean;
+  private terminal: TerminalInfo;
+  private externalCommand?: ShellCommandFallback;
 
   constructor(config: ShellConfig) {
     this.fs = config.fs;
@@ -30,7 +40,9 @@ export class ShellDSL {
     this.currentCwd = config.cwd;
     this.currentEnv = { ...config.env };
     this.commands = config.commands;
-    this.isTTY = config.isTTY ?? false;
+    this.terminal = config.terminal ?? { isTTY: config.isTTY ?? false };
+    this.isTTY = this.terminal.isTTY;
+    this.externalCommand = config.externalCommand;
   }
 
   // Template tag function
@@ -102,7 +114,8 @@ export class ShellDSL {
           env,
           commands: shell.commands,
           redirectObjects: options?.redirectObjects,
-          isTTY: shell.isTTY,
+          terminal: shell.terminal,
+          externalCommand: shell.externalCommand,
         });
 
         const tokens = shell.lex(source);
@@ -164,7 +177,8 @@ export class ShellDSL {
       cwd: this.currentCwd,
       env: this.currentEnv,
       commands: this.commands,
-      isTTY: this.isTTY,
+      terminal: this.terminal,
+      externalCommand: this.externalCommand,
     });
 
     return interpreter.execute(program.ast);
@@ -191,6 +205,8 @@ export function createShellDSL(config: ShellConfig): ShellDSL & ((strings: Templ
     commands: (shell as any).commands,
     shouldThrow: (shell as any).shouldThrow,
     isTTY: (shell as any).isTTY,
+    terminal: (shell as any).terminal,
+    externalCommand: (shell as any).externalCommand,
   });
 
   // Bind methods

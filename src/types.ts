@@ -51,6 +51,13 @@ export interface ShellCommandApi {
   exit(exitCode?: number): never;
 }
 
+export interface TerminalInfo {
+  isTTY: boolean;
+  columns?: number;
+  rows?: number;
+  colorDepth?: number;
+}
+
 export interface CommandContext {
   args: string[];
   stdin: Stdin;
@@ -59,16 +66,30 @@ export interface CommandContext {
   fs: VirtualFS;
   cwd: string;
   env: Record<string, string>;
+  terminal: TerminalInfo;
+  signal: AbortSignal;
   setCwd: (path: string) => void;
   exec?: (name: string, args: string[]) => Promise<ExecResult>;
   shell?: ShellCommandApi;
 }
+
+export interface ExternalCommandContext extends CommandContext {
+  name: string;
+}
+
+export type ShellCommandFallback = (ctx: ExternalCommandContext) => Promise<number>;
 
 export interface Stdin {
   stream(): AsyncIterable<Uint8Array>;
   buffer(): Promise<Buffer>;
   text(): Promise<string>;
   lines(): AsyncIterable<string>;
+}
+
+export interface ShellInputController extends AsyncIterable<Uint8Array> {
+  write(chunk: Uint8Array | string): Promise<void>;
+  close(): void;
+  abort(reason?: unknown): void;
 }
 
 export interface Stdout {
@@ -96,6 +117,30 @@ export interface ExecResult {
   exitCode: number;
 }
 
+export interface ShellOutputEvent {
+  fd: 1 | 2;
+  chunk: Uint8Array;
+}
+
+export type ShellInputSource = AsyncIterable<Uint8Array> | Buffer | string | null;
+
+export interface ShellExecutionOptions {
+  stdin?: ShellInputSource;
+  stdout?: Stdout;
+  stderr?: Stderr;
+  terminal?: TerminalInfo;
+  signal?: AbortSignal;
+  outputMode?: "separate" | "merged";
+}
+
+export interface ShellExecution {
+  stdout: AsyncIterable<Uint8Array>;
+  stderr: AsyncIterable<Uint8Array>;
+  output: AsyncIterable<ShellOutputEvent>;
+  exit: Promise<ExecResult>;
+  kill(reason?: unknown): void;
+}
+
 // Shell Configuration
 export interface ShellConfig {
   fs: VirtualFS;
@@ -103,6 +148,8 @@ export interface ShellConfig {
   env: Record<string, string>;
   commands: Record<string, Command>;
   isTTY?: boolean;
+  terminal?: TerminalInfo;
+  externalCommand?: ShellCommandFallback;
 }
 
 // Raw escape hatch type

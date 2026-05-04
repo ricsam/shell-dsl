@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.41
+
+### Patch Changes
+
+- add repl APIs
+
 ## 0.0.40
 
 ### Patch Changes

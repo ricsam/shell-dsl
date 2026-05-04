@@ -1,6 +1,7 @@
 // Main class exports
 export { ShellDSL, createShellDSL, type Program } from "./shell-dsl.ts";
 export { ShellPromise, type ShellPromiseOptions } from "./shell-promise.ts";
+export { ShellSession, createShellSession, type ShellSessionOptions } from "./shell-session.ts";
 
 // Types
 export type {
@@ -16,7 +17,15 @@ export type {
   ExecResult,
   ShellConfig,
   ShellCommandApi,
+  ShellCommandFallback,
+  ExternalCommandContext,
   ShellRunOptions,
+  TerminalInfo,
+  ShellInputController,
+  ShellInputSource,
+  ShellExecutionOptions,
+  ShellExecution,
+  ShellOutputEvent,
   RawValue,
 } from "./types.ts";
 export { isRawValue } from "./types.ts";
@@ -83,7 +92,19 @@ export {
 
 // I/O
 export { createStdin, StdinImpl } from "./io/index.ts";
-export { createStdout, createStderr, createPipe, OutputCollectorImpl, PipeBuffer } from "./io/index.ts";
+export {
+  createStdout,
+  createStderr,
+  createPipe,
+  createShellInput,
+  OutputCollectorImpl,
+  PipeBuffer,
+  ShellInputControllerImpl,
+} from "./io/index.ts";
+
+// Interactive input analysis
+export { analyzeInput } from "./input-analysis.ts";
+export type { InputAnalysis, InputIncompleteReason } from "./input-analysis.ts";
 
 // Utilities
 export { escape, escapeForInterpolation, globVirtualFS } from "./utils/index.ts";
