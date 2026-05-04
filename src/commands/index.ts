@@ -29,6 +29,8 @@ export { cd } from "./cd/cd.ts";
 export { tr } from "./tr/tr.ts";
 export { cut } from "./cut/cut.ts";
 export { od } from "./od/od.ts";
+export { sh, evalCmd as eval, evalCmd, source, dot } from "./sh/sh.ts";
+export { exitCmd as exit, exitCmd } from "./exit/exit.ts";
 
 // Re-export all commands as a bundle
 import { echo } from "./echo/echo.ts";
@@ -60,6 +62,8 @@ import { cd } from "./cd/cd.ts";
 import { tr } from "./tr/tr.ts";
 import { cut } from "./cut/cut.ts";
 import { od } from "./od/od.ts";
+import { sh, evalCmd, source, dot } from "./sh/sh.ts";
+import { exitCmd } from "./exit/exit.ts";
 
 export const builtinCommands: Record<string, Command> = {
   echo,
@@ -94,4 +98,9 @@ export const builtinCommands: Record<string, Command> = {
   tr,
   cut,
   od,
+  sh,
+  eval: evalCmd,
+  source,
+  ".": dot,
+  exit: exitCmd,
 };

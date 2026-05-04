@@ -33,6 +33,7 @@ bun add shell-dsl memfs
 - **Virtual filesystem** — Uses memfs for complete isolation from the real filesystem
 - **Real filesystem** — Optional sandboxed access to real files with path containment and permissions
 - **Explicit command registry** — Only registered commands can execute
+- **Executable scripts** — Run virtual-filesystem scripts with `./script`, `sh`, `source`, and shebang dispatch
 - **Automatic escaping** — Interpolated values are escaped by default for safety
 - **POSIX-inspired syntax** — Pipes, redirects, control flow operators, and more
 - **Streaming pipelines** — Commands communicate via async iteration
@@ -234,6 +235,15 @@ await sh`echo $USER`.text();        // "alice\n"
 await sh`echo "Home: $HOME"`.text(); // "Home: /home/alice\n"
 ```
 
+`$?` expands to the previous command's exit code:
+
+```ts
+await sh`false; echo exit:$?; true; echo ok:$?`.text();
+// "exit:1\nok:0\n"
+
+await sh`logs clear backend; restart-backend; echo exit:$?; logs backend 100`;
+```
+
 ### Quoting Semantics
 
 | Quote | Behavior |
@@ -374,6 +384,101 @@ Nested substitution is supported:
 await sh`echo "Files: $(ls $(pwd))"`.text();
 ```
 
+## Executable Scripts
+
+Command names containing `/` are treated as virtual-filesystem script paths when no registered command matches. Scripts run inside shell-dsl, not through the host OS:
+
+```ts
+await fs.writeFile("/hello", `
+echo "script: $0"
+echo "args: $1 / $#"
+`.trimStart());
+
+await sh`./hello Alice`.text();
+// "script: ./hello\nargs: Alice / 1\n"
+```
+
+Scripts without a shebang run as shell-dsl scripts. `#!/bin/sh` and `#!/usr/bin/env sh` do the same thing:
+
+```ts
+await fs.writeFile("/greet", `
+#!/bin/sh
+echo "Hello, $1"
+`.trimStart());
+
+await sh`./greet Alice`.text(); // "Hello, Alice\n"
+```
+
+Script execution is subprocess-like: variables and `cd` inside `./script` do not leak back to the caller. Use `source` or `.` when you want the script to mutate the current shell state:
+
+```ts
+await fs.writeFile("/env", "NAME=Alice\ncd /work\n");
+
+await sh`source ./env; echo "$NAME"; pwd`.text();
+// "Alice\n/work\n"
+```
+
+### Positional Parameters
+
+Scripts and `sh -c` support common shell parameters:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `$0` | Script name or `sh -c` argv0 |
+| `$1`, `$2`, ... | Positional arguments |
+| `$#` | Number of positional arguments |
+| `$*` | Positional arguments joined with spaces |
+| `$@` | Positional arguments; quoted `"$@"` expands as separate fields |
+| `$?` | Previous command's exit code |
+
+```ts
+await sh`sh -c 'echo "$0:$1:$#"' name value`.text();
+// "name:value:1\n"
+```
+
+Scripts can stop with an explicit status via `exit`:
+
+```ts
+await fs.writeFile("/restart", "restart-backend\nexit $?\n");
+
+const result = await sh`./restart`.nothrow();
+result.exitCode; // restart-backend's exit code
+```
+
+### Shebang Dispatch
+
+Non-`sh` shebangs dispatch to registered commands by interpreter basename. For example, `#!/bin/cat` runs the registered `cat` command with the script path as its first argument:
+
+```ts
+await fs.writeFile("/show", "#!/bin/cat\nhello\n");
+await sh`./show`.text(); // "#!/bin/cat\nhello\n"
+```
+
+Custom shebangs work the same way:
+
+```ts
+const customCommand: Command = async (ctx) => {
+  await ctx.stdout.writeText(JSON.stringify(ctx.args) + "\n");
+  return 0;
+};
+
+const sh = createShellDSL({
+  fs,
+  cwd: "/",
+  env: {},
+  commands: { ...builtinCommands, custom_command: customCommand },
+});
+
+await fs.writeFile("/run", "#!/bin/custom_command\n");
+await sh`./run arg`.text(); // "[\"./run\",\"arg\"]\n"
+```
+
+`#!/bin/bash` is not enabled by default. If you intentionally want that alias, register one explicitly:
+
+```ts
+commands: { ...builtinCommands, bash: builtinCommands.sh }
+```
+
 ## Defining Custom Commands
 
 Commands are async functions that receive a `CommandContext` and return an exit code (0 = success):
@@ -406,6 +511,9 @@ interface CommandContext {
   fs: VirtualFS;                     // Virtual filesystem
   cwd: string;                       // Current working directory
   env: Record<string, string>;       // Environment variables
+  setCwd(path: string): void;         // Change current working directory
+  exec?: (name: string, args: string[]) => Promise<ExecResult>;
+  shell?: ShellCommandApi;            // Evaluate shell-dsl source from commands
 }
 ```
 
@@ -567,7 +675,7 @@ import { builtinCommands } from "shell-dsl/commands";
 Or import individually:
 
 ```ts
-import { echo, printf, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk, cut, od } from "shell-dsl/commands";
+import { echo, printf, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk, cut, od, sh, evalCmd, source, dot, exitCmd } from "shell-dsl/commands";
 ```
 
 | Command | Description |
@@ -595,6 +703,10 @@ import { echo, printf, cat, grep, wc, cp, mv, touch, tee, tree, find, sed, awk, 
 | `awk` | Pattern scanning (`{print $1}`, `-F`, `NF`, `NR`) |
 | `cut` | Select fields/characters (`-f`, `-d`, `-c`, `-b`, `-s`, `--complement`) |
 | `od` | Dump binary/text data (`-A`, `-t x1/x2/o1/o2/c`, `-j`, `-N`, `-v`) |
+| `sh` | Run shell-dsl source from a file, stdin, or `-c` string |
+| `eval` | Evaluate arguments as shell-dsl source in the current shell state |
+| `source` / `.` | Execute a script in the current shell state |
+| `exit` | Stop the current shell with an optional exit code |
 | `test` / `[` | File and string tests (`-f`, `-d`, `-e`, `-z`, `-n`, `=`, `!=`) |
 | `true` | Exit with code 0 |
 | `false` | Exit with code 1 |
@@ -948,8 +1060,8 @@ await sh`echo ${{ raw: "$(date)" }}`.text();
 
 1. **No host access** — All commands run in-process against a virtual filesystem
 2. **Automatic escaping** — Interpolated values are escaped by default
-3. **Explicit command registry** — Only registered commands can execute
-4. **No shell spawning** — Never invokes `/bin/sh` or similar
+3. **Explicit command registry** — Only registered commands can execute, including shebang-dispatched interpreters
+4. **No shell spawning** — Never invokes `/bin/sh` or similar; `#!/bin/sh` maps to shell-dsl's in-process `sh`
 
 The `{ raw: ... }` escape hatch exists for advanced use cases but should be used with extreme caution.
 
@@ -968,6 +1080,8 @@ import type {
   FileStat,
   ExecResult,
   ShellConfig,
+  ShellCommandApi,
+  ShellRunOptions,
   RawValue,
   Permission,
   PermissionRules,

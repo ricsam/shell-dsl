@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.40
+
+### Patch Changes
+
+- add shell script support
+
 ## 0.0.39
 
 ### Patch Changes

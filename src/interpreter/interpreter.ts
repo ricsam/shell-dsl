@@ -10,8 +10,10 @@ import type {
   WordNode,
   WordPart,
 } from "../parser/ast.ts";
-import type { Command, VirtualFS, ExecResult, OutputCollector, RedirectObjectMap } from "../types.ts";
+import type { Command, VirtualFS, ExecResult, OutputCollector, RedirectObjectMap, ShellCommandApi } from "../types.ts";
 import { createCommandContext } from "./context.ts";
+import { Lexer } from "../lexer/lexer.ts";
+import { Parser } from "../parser/parser.ts";
 import { createStdin } from "../io/stdin.ts";
 import { createStdout, createStderr, createPipe, PipeBuffer, createBufferTargetCollector } from "../io/stdout.ts";
 import { isDevNullPath } from "../fs/special-files.ts";
@@ -23,6 +25,9 @@ export interface InterpreterOptions {
   commands: Record<string, Command>;
   redirectObjects?: RedirectObjectMap;
   isTTY?: boolean;
+  argv0?: string;
+  positionalParameters?: string[];
+  lastExitCode?: number;
 }
 
 interface ExpandedSegment {
@@ -50,6 +55,12 @@ export class ContinueException extends Error {
   }
 }
 
+export class ExitException extends Error {
+  constructor(public exitCode: number) {
+    super("exit");
+  }
+}
+
 export class Interpreter {
   private fs: VirtualFS;
   private cwd: string;
@@ -58,6 +69,9 @@ export class Interpreter {
   private redirectObjects: RedirectObjectMap;
   private loopDepth: number = 0;
   private isTTY: boolean;
+  private argv0: string;
+  private positionalParameters: string[];
+  private lastExitCode: number;
 
   constructor(options: InterpreterOptions) {
     this.fs = options.fs;
@@ -66,6 +80,9 @@ export class Interpreter {
     this.commands = options.commands;
     this.redirectObjects = options.redirectObjects ?? {};
     this.isTTY = options.isTTY ?? false;
+    this.argv0 = options.argv0 ?? "sh";
+    this.positionalParameters = [...(options.positionalParameters ?? [])];
+    this.lastExitCode = options.lastExitCode ?? 0;
   }
 
   getLoopDepth(): number {
@@ -76,7 +93,16 @@ export class Interpreter {
     const stdout = createStdout(this.isTTY);
     const stderr = createStderr(this.isTTY);
 
-    const exitCode = await this.executeNode(ast, null, stdout, stderr);
+    let exitCode: number;
+    try {
+      exitCode = await this.executeNode(ast, null, stdout, stderr);
+    } catch (err) {
+      if (!(err instanceof ExitException)) {
+        throw err;
+      }
+      exitCode = err.exitCode;
+      this.lastExitCode = exitCode;
+    }
 
     stdout.close();
     stderr.close();
@@ -94,30 +120,43 @@ export class Interpreter {
     stdout: OutputCollector,
     stderr: OutputCollector
   ): Promise<number> {
+    let exitCode: number;
     switch (node.type) {
       case "command":
-        return this.executeCommand(node, stdinSource, stdout, stderr);
+        exitCode = await this.executeCommand(node, stdinSource, stdout, stderr);
+        break;
       case "pipeline":
-        return this.executePipeline(node.commands, stdinSource, stdout, stderr);
+        exitCode = await this.executePipeline(node.commands, stdinSource, stdout, stderr);
+        break;
       case "sequence":
-        return this.executeSequence(node.commands, stdinSource, stdout, stderr);
+        exitCode = await this.executeSequence(node.commands, stdinSource, stdout, stderr);
+        break;
       case "and":
-        return this.executeAnd(node.left, node.right, stdinSource, stdout, stderr);
+        exitCode = await this.executeAnd(node.left, node.right, stdinSource, stdout, stderr);
+        break;
       case "or":
-        return this.executeOr(node.left, node.right, stdinSource, stdout, stderr);
+        exitCode = await this.executeOr(node.left, node.right, stdinSource, stdout, stderr);
+        break;
       case "if":
-        return this.executeIf(node, stdinSource, stdout, stderr);
+        exitCode = await this.executeIf(node, stdinSource, stdout, stderr);
+        break;
       case "for":
-        return this.executeFor(node, stdinSource, stdout, stderr);
+        exitCode = await this.executeFor(node, stdinSource, stdout, stderr);
+        break;
       case "while":
-        return this.executeWhile(node, stdinSource, stdout, stderr);
+        exitCode = await this.executeWhile(node, stdinSource, stdout, stderr);
+        break;
       case "until":
-        return this.executeUntil(node, stdinSource, stdout, stderr);
+        exitCode = await this.executeUntil(node, stdinSource, stdout, stderr);
+        break;
       case "case":
-        return this.executeCase(node, stdinSource, stdout, stderr);
+        exitCode = await this.executeCase(node, stdinSource, stdout, stderr);
+        break;
       default:
         throw new Error("Cannot execute unknown node type");
     }
+    this.lastExitCode = exitCode;
+    return exitCode;
   }
 
   private async executeCommand(
@@ -184,81 +223,14 @@ export class Interpreter {
       actualStdout = actualStderr;
     }
 
-    // Look up command
-    const command = this.commands[name];
-    if (!command) {
-      await stderr.writeText(`${name}: command not found\n`);
-      return 127;
-    }
-
-    // Create exec closure for sub-command invocation
-    const exec = async (cmdName: string, cmdArgs: string[]) => {
-      const cmd = this.commands[cmdName];
-      if (!cmd) {
-        return {
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.from(`${cmdName}: command not found\n`),
-          exitCode: 127,
-        };
-      }
-      const subStdout = createStdout();
-      const subStderr = createStderr();
-      const subCtx = createCommandContext({
-        args: cmdArgs,
-        stdin: createStdin(null),
-        stdout: subStdout,
-        stderr: subStderr,
-        fs: this.fs,
-        cwd: this.cwd,
-        env: { ...assignmentEnv },
-        setCwd: (path: string) => this.setCwd(path),
-        exec,
-      });
-      let exitCode: number;
-      try {
-        exitCode = await cmd(subCtx);
-      } catch (err) {
-        if (err instanceof BreakException || err instanceof ContinueException) {
-          throw err;
-        }
-        const message = err instanceof Error ? err.message : String(err);
-        await subStderr.writeText(`${cmdName}: ${message}\n`);
-        exitCode = 1;
-      }
-      subStdout.close();
-      subStderr.close();
-      return {
-        stdout: await subStdout.collect(),
-        stderr: await subStderr.collect(),
-        exitCode,
-      };
-    };
-
-    // Create context and execute
-    const ctx = createCommandContext({
+    let exitCode = await this.invokeCommand(
+      name,
       args,
-      stdin: createStdin(actualStdin),
-      stdout: actualStdout,
-      stderr: actualStderr,
-      fs: this.fs,
-      cwd: this.cwd,
-      env: assignmentEnv,
-      setCwd: (path: string) => this.setCwd(path),
-      exec,
-    });
-
-    let exitCode: number;
-    try {
-      exitCode = await command(ctx);
-    } catch (err) {
-      // Re-throw loop control exceptions
-      if (err instanceof BreakException || err instanceof ContinueException) {
-        throw err;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      await stderr.writeText(`${name}: ${message}\n`);
-      exitCode = 1;
-    }
+      actualStdin,
+      actualStdout,
+      actualStderr,
+      assignmentEnv
+    );
 
     // Close redirect collectors and wait for file writes
     if (actualStdout !== stdout) {
@@ -283,6 +255,330 @@ export class Interpreter {
     }
 
     return exitCode;
+  }
+
+  private async invokeCommand(
+    name: string,
+    args: string[],
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector,
+    env: Record<string, string>
+  ): Promise<number> {
+    const command = this.commands[name];
+    if (command) {
+      return this.invokeRegisteredCommand(name, command, args, stdinSource, stdout, stderr, env);
+    }
+
+    if (name.includes("/")) {
+      return this.executeExecutableFile(name, args, stdinSource, stdout, stderr, env);
+    }
+
+    await stderr.writeText(`${name}: command not found\n`);
+    return 127;
+  }
+
+  private async invokeRegisteredCommand(
+    name: string,
+    command: Command,
+    args: string[],
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector,
+    env: Record<string, string>
+  ): Promise<number> {
+    const exec = this.createExec(env);
+    const shell = this.createShellApi(stdinSource, stdout, stderr, env);
+    const ctx = createCommandContext({
+      args,
+      stdin: createStdin(stdinSource),
+      stdout,
+      stderr,
+      fs: this.fs,
+      cwd: this.cwd,
+      env,
+      setCwd: (path: string) => this.setCwd(path),
+      exec,
+      shell,
+    });
+
+    try {
+      return await command(ctx);
+    } catch (err) {
+      if (err instanceof BreakException || err instanceof ContinueException || err instanceof ExitException) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      await stderr.writeText(`${name}: ${message}\n`);
+      return 1;
+    }
+  }
+
+  private createExec(env: Record<string, string>): (name: string, args: string[]) => Promise<ExecResult> {
+    return async (name: string, args: string[]) => {
+      const subStdout = createStdout();
+      const subStderr = createStderr();
+      const exitCode = await this.invokeCommand(name, args, null, subStdout, subStderr, { ...env });
+
+      subStdout.close();
+      subStderr.close();
+
+      return {
+        stdout: await subStdout.collect(),
+        stderr: await subStderr.collect(),
+        exitCode,
+      };
+    };
+  }
+
+  private createShellApi(
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector,
+    env: Record<string, string>
+  ): ShellCommandApi {
+    return {
+      eval: (source: string) =>
+        this.executeSourceInCurrentFrame(source, stdinSource, stdout, stderr, "eval"),
+      source: (path: string, args: string[] = []) =>
+        this.sourceFile(path, args, stdinSource, stdout, stderr),
+      runScript: (path: string, args: string[] = []) =>
+        this.executeExecutableFile(path, args, stdinSource, stdout, stderr, { ...env }),
+      runShell: (source: string, options = {}) =>
+        this.executeIsolatedShellSource(
+          source,
+          options.argv0 ?? "sh",
+          options.args ?? [],
+          stdinSource,
+          stdout,
+          stderr,
+          env
+        ),
+      getLastExitCode: () => this.lastExitCode,
+      exit: (exitCode = this.lastExitCode) => {
+        throw new ExitException(this.normalizeExitCode(exitCode));
+      },
+    };
+  }
+
+  private async executeExecutableFile(
+    pathName: string,
+    args: string[],
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector,
+    env: Record<string, string>
+  ): Promise<number> {
+    const loaded = await this.loadScriptSource(pathName, stderr, 127);
+    if (!loaded.ok) {
+      return loaded.exitCode;
+    }
+
+    const shebang = this.parseShebang(loaded.source);
+    if (!shebang || shebang.command === "sh") {
+      return this.executeIsolatedShellSource(
+        loaded.source,
+        pathName,
+        args,
+        stdinSource,
+        stdout,
+        stderr,
+        env
+      );
+    }
+
+    const command = this.commands[shebang.command];
+    if (!command) {
+      await stderr.writeText(`${pathName}: unsupported interpreter: ${shebang.display}\n`);
+      return 126;
+    }
+
+    const child = new Interpreter({
+      fs: this.fs,
+      cwd: this.cwd,
+      env: { ...env },
+      commands: this.commands,
+      redirectObjects: this.redirectObjects,
+      isTTY: this.isTTY,
+      argv0: shebang.command,
+      positionalParameters: [],
+    });
+
+    return child.invokeRegisteredCommand(
+      shebang.command,
+      command,
+      [...shebang.args, pathName, ...args],
+      stdinSource,
+      stdout,
+      stderr,
+      { ...env }
+    );
+  }
+
+  private async sourceFile(
+    pathName: string,
+    args: string[],
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector
+  ): Promise<number> {
+    const loaded = await this.loadScriptSource(pathName, stderr, 1);
+    if (!loaded.ok) {
+      return loaded.exitCode;
+    }
+
+    return this.executeSourceInCurrentFrame(
+      loaded.source,
+      stdinSource,
+      stdout,
+      stderr,
+      pathName,
+      args.length > 0 ? { args } : undefined
+    );
+  }
+
+  private async executeIsolatedShellSource(
+    source: string,
+    argv0: string,
+    args: string[],
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector,
+    env: Record<string, string>
+  ): Promise<number> {
+    const interpreter = new Interpreter({
+      fs: this.fs,
+      cwd: this.cwd,
+      env: { ...env },
+      commands: this.commands,
+      redirectObjects: this.redirectObjects,
+      isTTY: this.isTTY,
+      argv0,
+      positionalParameters: args,
+    });
+
+    try {
+      return await interpreter.executeSourceInCurrentFrame(source, stdinSource, stdout, stderr, argv0);
+    } catch (err) {
+      if (err instanceof ExitException) {
+        return err.exitCode;
+      }
+      throw err;
+    }
+  }
+
+  private async executeSourceInCurrentFrame(
+    source: string,
+    stdinSource: AsyncIterable<Uint8Array> | null,
+    stdout: OutputCollector,
+    stderr: OutputCollector,
+    errorName: string,
+    positionalOverride?: { argv0?: string; args?: string[] }
+  ): Promise<number> {
+    const previousArgv0 = this.argv0;
+    const previousPositionals = this.positionalParameters;
+
+    if (positionalOverride?.argv0 !== undefined) {
+      this.argv0 = positionalOverride.argv0;
+    }
+    if (positionalOverride?.args !== undefined) {
+      this.positionalParameters = [...positionalOverride.args];
+    }
+
+    try {
+      const ast = this.parseSource(source);
+      if (!ast) {
+        return 0;
+      }
+      return await this.executeNode(ast, stdinSource, stdout, stderr);
+    } catch (err) {
+      if (err instanceof BreakException || err instanceof ContinueException || err instanceof ExitException) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      await stderr.writeText(`${errorName}: ${message}\n`);
+      return 2;
+    } finally {
+      if (positionalOverride?.argv0 !== undefined) {
+        this.argv0 = previousArgv0;
+      }
+      if (positionalOverride?.args !== undefined) {
+        this.positionalParameters = previousPositionals;
+      }
+    }
+  }
+
+  private parseSource(source: string): ASTNode | null {
+    const tokens = new Lexer(source, { preserveNewlines: true }).tokenize();
+    if (tokens.every((token) => token.type === "newline" || token.type === "eof")) {
+      return null;
+    }
+    return new Parser(tokens).parse();
+  }
+
+  private async loadScriptSource(
+    pathName: string,
+    stderr: OutputCollector,
+    missingExitCode: number
+  ): Promise<{ ok: true; path: string; source: string } | { ok: false; exitCode: number }> {
+    const path = this.fs.resolve(this.cwd, pathName);
+
+    if (!(await this.fs.exists(path))) {
+      await stderr.writeText(`${pathName}: No such file or directory\n`);
+      return { ok: false, exitCode: missingExitCode };
+    }
+
+    const stat = await this.fs.stat(path);
+    if (stat.isDirectory()) {
+      await stderr.writeText(`${pathName}: is a directory\n`);
+      return { ok: false, exitCode: 126 };
+    }
+    if (!stat.isFile()) {
+      await stderr.writeText(`${pathName}: not a file\n`);
+      return { ok: false, exitCode: 126 };
+    }
+
+    try {
+      return { ok: true, path, source: await this.fs.readFile(path, "utf-8") };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await stderr.writeText(`${pathName}: ${message}\n`);
+      return { ok: false, exitCode: 126 };
+    }
+  }
+
+  private parseShebang(source: string): { command: string; args: string[]; display: string } | null {
+    if (!source.startsWith("#!")) {
+      return null;
+    }
+
+    const lineEnd = source.indexOf("\n");
+    const line = source.slice(2, lineEnd === -1 ? undefined : lineEnd).trim();
+    if (line === "") {
+      return { command: "sh", args: [], display: "sh" };
+    }
+
+    const parts = line.split(/\s+/);
+    const executable = parts[0]!;
+    const executableName = this.fs.basename(executable);
+
+    if (executableName === "env") {
+      const envCommand = parts[1];
+      if (!envCommand) {
+        return { command: "env", args: [], display: line };
+      }
+      return {
+        command: this.fs.basename(envCommand),
+        args: parts.slice(2),
+        display: line,
+      };
+    }
+
+    return {
+      command: executableName,
+      args: parts.slice(1),
+      display: line,
+    };
   }
 
   private async handleRedirect(
@@ -847,6 +1143,11 @@ export class Interpreter {
         continue;
       }
 
+      if (part.type === "variable" && part.name === "@" && part.quoted) {
+        this.appendQuotedPositionalParameters(fields);
+        continue;
+      }
+
       const value = await this.expandWordPart(part, env);
       if (part.quoted) {
         this.appendSegment(fields[fields.length - 1]!, value, true);
@@ -874,13 +1175,45 @@ export class Interpreter {
       case "text":
         return part.value;
       case "variable":
-        return env[part.name] ?? "";
+        return this.getVariableValue(part.name, env);
       case "substitution":
         return this.executeSubstitution(part.command, env);
       case "arithmetic":
         return String(this.evaluateArithmetic(part.expression, env));
       default:
         throw new Error("Cannot expand unknown word part");
+    }
+  }
+
+  private getVariableValue(name: string, env: Record<string, string>): string {
+    if (name === "0") {
+      return this.argv0;
+    }
+    if (name === "#") {
+      return String(this.positionalParameters.length);
+    }
+    if (name === "?") {
+      return String(this.lastExitCode);
+    }
+    if (name === "*" || name === "@") {
+      return this.positionalParameters.join(" ");
+    }
+    if (/^[1-9]$/.test(name)) {
+      return this.positionalParameters[Number(name) - 1] ?? "";
+    }
+    return env[name] ?? "";
+  }
+
+  private appendQuotedPositionalParameters(fields: ExpandedField[]): void {
+    if (this.positionalParameters.length === 0) {
+      return;
+    }
+
+    this.appendSegment(fields[fields.length - 1]!, this.positionalParameters[0]!, true);
+    for (let i = 1; i < this.positionalParameters.length; i++) {
+      const field = this.createExpandedField();
+      this.appendSegment(field, this.positionalParameters[i]!, true);
+      fields.push(field);
     }
   }
 
@@ -892,6 +1225,9 @@ export class Interpreter {
       commands: this.commands,
       redirectObjects: this.redirectObjects,
       isTTY: false,
+      argv0: this.argv0,
+      positionalParameters: this.positionalParameters,
+      lastExitCode: this.lastExitCode,
     });
     const result = await interpreter.execute(command);
     return result.stdout.toString("utf-8").replace(/\n+$/, "");
@@ -1023,8 +1359,8 @@ export class Interpreter {
     expandedExpr = expandedExpr.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (_, name) => {
       return env[name] ?? "0";
     });
-    expandedExpr = expandedExpr.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, name) => {
-      return env[name] ?? "0";
+    expandedExpr = expandedExpr.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*|[0-9#*@?])/g, (_, name) => {
+      return this.getVariableValue(name, env) || "0";
     });
     // Also handle bare variable names (in arithmetic, variables can be referenced without $)
     expandedExpr = expandedExpr.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (match) => {
@@ -1190,6 +1526,13 @@ export class Interpreter {
     };
 
     return parseOr();
+  }
+
+  private normalizeExitCode(exitCode: number): number {
+    if (!Number.isFinite(exitCode)) {
+      return 2;
+    }
+    return ((Math.trunc(exitCode) % 256) + 256) % 256;
   }
 
   setCwd(cwd: string): void {

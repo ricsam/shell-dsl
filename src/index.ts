@@ -15,6 +15,8 @@ export type {
   OutputCollector,
   ExecResult,
   ShellConfig,
+  ShellCommandApi,
+  ShellRunOptions,
   RawValue,
 } from "./types.ts";
 export { isRawValue } from "./types.ts";
@@ -64,7 +66,7 @@ export {
 } from "./parser/index.ts";
 
 // Interpreter
-export { Interpreter, type InterpreterOptions, BreakException, ContinueException } from "./interpreter/index.ts";
+export { Interpreter, type InterpreterOptions, BreakException, ContinueException, ExitException } from "./interpreter/index.ts";
 
 // Filesystem
 export { createVirtualFS } from "./fs/index.ts";

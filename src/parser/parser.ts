@@ -513,6 +513,18 @@ export class Parser {
         continue;
       }
 
+      if (["#", "*", "@", "?"].includes(content[i] ?? "")) {
+        parts.push({ type: "variable", name: content[i]!, quoted: false });
+        i++;
+        continue;
+      }
+
+      if (/[0-9]/.test(content[i] ?? "")) {
+        parts.push({ type: "variable", name: content[i]!, quoted: false });
+        i++;
+        continue;
+      }
+
       if (content[i] === "(" && content[i + 1] === "(") {
         i += 2;
         let depth = 1;

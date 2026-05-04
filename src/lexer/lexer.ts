@@ -259,6 +259,14 @@ export class Lexer {
       return { type: "variable", name };
     }
 
+    if (["#", "*", "@", "?"].includes(this.peek())) {
+      return { type: "variable", name: this.advance() };
+    }
+
+    if (/[0-9]/.test(this.peek())) {
+      return { type: "variable", name: this.advance() };
+    }
+
     // $VAR syntax
     let name = "";
     while (!this.isAtEnd() && this.isVarChar(this.peek())) {
@@ -540,6 +548,15 @@ export class Lexer {
             i++; // consume }
           }
           tokens.push({ type: "variable", name: varName });
+        }
+        // Special and positional parameters
+        else if (["#", "*", "@", "?"].includes(value[i]!)) {
+          tokens.push({ type: "variable", name: value[i]! });
+          i++;
+        }
+        else if (/[0-9]/.test(value[i]!)) {
+          tokens.push({ type: "variable", name: value[i]! });
+          i++;
         }
         // $VAR syntax
         else if (/[a-zA-Z_]/.test(value[i]!)) {

@@ -37,6 +37,20 @@ export interface FileStat {
 // Command Interfaces
 export type Command = (ctx: CommandContext) => Promise<number>;
 
+export interface ShellRunOptions {
+  argv0?: string;
+  args?: string[];
+}
+
+export interface ShellCommandApi {
+  eval(source: string): Promise<number>;
+  source(path: string, args?: string[]): Promise<number>;
+  runScript(path: string, args?: string[]): Promise<number>;
+  runShell(source: string, options?: ShellRunOptions): Promise<number>;
+  getLastExitCode(): number;
+  exit(exitCode?: number): never;
+}
+
 export interface CommandContext {
   args: string[];
   stdin: Stdin;
@@ -47,6 +61,7 @@ export interface CommandContext {
   env: Record<string, string>;
   setCwd: (path: string) => void;
   exec?: (name: string, args: string[]) => Promise<ExecResult>;
+  shell?: ShellCommandApi;
 }
 
 export interface Stdin {
