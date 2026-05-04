@@ -5,6 +5,7 @@ import {
   createShellSession,
   createVirtualFS,
   type Command,
+  type CommandCompleter,
   type VirtualFS,
 } from "../src/index.ts";
 import { builtinCommands } from "../src/commands/index.ts";
@@ -132,5 +133,38 @@ describe("ShellSession", () => {
 
     expect(result.exitCode).toBe(42);
     expect(result.stdout.toString("utf-8")).toBe("missing:one,two:/:world\n");
+  });
+
+  test("completes command names, paths, and custom command arguments", async () => {
+    const custom: Command = async () => 0;
+    let seenArgs: string[] = [];
+    const customCompleter: CommandCompleter = (ctx) => {
+      seenArgs = ctx.args;
+      return {
+        replacement: ctx.word,
+        matches: ["--json ", "--verbose ", "status "].filter((match) => match.startsWith(ctx.word)),
+      };
+    };
+    const session = createShellSession({
+      fs: createFs({ "/README.txt": "", "/src/.keep": "" }),
+      cwd: "/",
+      env: {},
+      commands: { ...builtinCommands, custom },
+      completions: { custom: customCompleter },
+    });
+
+    await expect(session.complete("ec", 2)).resolves.toMatchObject({
+      replacement: "ec",
+      matches: expect.arrayContaining(["echo "]),
+    });
+    await expect(session.complete("cat RE", 6)).resolves.toEqual({
+      replacement: "RE",
+      matches: ["README.txt "],
+    });
+    await expect(session.complete("custom --v", 10)).resolves.toEqual({
+      replacement: "--v",
+      matches: ["--verbose "],
+    });
+    expect(seenArgs).toEqual(["--v"]);
   });
 });

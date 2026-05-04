@@ -1,5 +1,11 @@
 # shell-dsl
 
+## 0.0.42
+
+### Patch Changes
+
+- add shell completions support for custom commands
+
 ## 0.0.41
 
 ### Patch Changes

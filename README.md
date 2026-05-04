@@ -393,6 +393,29 @@ const session = createShellSession({
 });
 ```
 
+Custom commands can provide argument completions by registering a `CommandCompleter` under the same command name:
+
+```ts
+import type { CommandCompleter } from "shell-dsl";
+
+const completions: Record<string, CommandCompleter> = {
+  deploy: async (ctx) => ({
+    replacement: ctx.word,
+    matches: ["--dry-run ", "--prod ", "--staging "].filter((match) =>
+      match.startsWith(ctx.word)
+    ),
+  }),
+};
+
+const session = createShellSession({
+  fs,
+  cwd: "/",
+  env: {},
+  commands: { ...builtinCommands, deploy },
+  completions,
+});
+```
+
 Use `analyzeInput(source)` before running user-entered text to distinguish complete commands from multiline input such as unclosed quotes, heredocs, trailing pipes, and compound statements.
 
 ## Terminal Demo

@@ -92,6 +92,26 @@ describe("terminal demo executor protocol", () => {
         replacement: "RE",
         matches: ["README.txt "],
       });
+
+      child.stdin.write(`${JSON.stringify({
+        type: "complete",
+        id: 3,
+        source: "demo --v",
+        cursor: 8,
+      })}\n`);
+
+      const customCompletion = JSON.parse((await lines.next()).value!) as {
+        type: "complete";
+        id: number;
+        replacement: string;
+        matches: string[];
+      };
+      expect(customCompletion).toEqual({
+        type: "complete",
+        id: 3,
+        replacement: "--v",
+        matches: ["--verbose "],
+      });
     } finally {
       child.stdin.write(`${JSON.stringify({ type: "exit" })}\n`);
       child.stdin.end();

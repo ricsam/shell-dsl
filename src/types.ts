@@ -58,6 +58,27 @@ export interface TerminalInfo {
   colorDepth?: number;
 }
 
+export interface CompletionContext {
+  source: string;
+  cursor: number;
+  command: string;
+  args: string[];
+  word: string;
+  wordStart: number;
+  wordEnd: number;
+  cwd: string;
+  env: Record<string, string>;
+  fs: VirtualFS;
+  terminal: TerminalInfo;
+}
+
+export interface CompletionResult {
+  replacement: string;
+  matches: string[];
+}
+
+export type CommandCompleter = (ctx: CompletionContext) => CompletionResult | Promise<CompletionResult>;
+
 export interface CommandContext {
   args: string[];
   stdin: Stdin;
@@ -147,6 +168,7 @@ export interface ShellConfig {
   cwd: string;
   env: Record<string, string>;
   commands: Record<string, Command>;
+  completions?: Record<string, CommandCompleter>;
   isTTY?: boolean;
   terminal?: TerminalInfo;
   externalCommand?: ShellCommandFallback;
